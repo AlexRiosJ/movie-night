@@ -1,0 +1,246 @@
+<!doctype html>
+<html lang="es" data-theme="spooky">
+  <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="theme-color" content="#faf7f2">
+    <meta name="description" content="Una peli, algo rico y un buen plan. Organiza tus movie nights y guarda tu colección, sin cuentas ni complicaciones.">
+    <title>Movie Night &mdash; Tu pr&oacute;ximo buen plan</title>
+    <link rel="icon" href="./assets/favicon.svg" type="image/svg+xml">
+    <link rel="stylesheet" href="./styles.css">
+    <script src="./app.js" defer></script>
+  </head>
+  <body>
+    <a class="skip-link" href="#main">Saltar al contenido</a>
+
+    <!-- Iconos locales reutilizables: no hacen falta librerias ni servicios externos. -->
+    <svg class="icon-definitions" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+      <symbol id="icon-moon" viewBox="0 0 24 24"><path d="M20.8 13.1A9 9 0 0 1 10.9 3.2 9 9 0 1 0 20.8 13.1Z"/></symbol>
+      <symbol id="icon-shuffle" viewBox="0 0 24 24"><path d="M3 6h3c5 0 7 12 12 12h3M17 14l4 4-4 4M3 18h3c2 0 3.5-2 5-5M14 8c1.2-1.3 2.4-2 4-2h3M17 2l4 4-4 4"/></symbol>
+      <symbol id="icon-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+      <symbol id="icon-check" viewBox="0 0 24 24"><path d="m5 12 4 4L19 6"/></symbol>
+      <symbol id="icon-arrow" viewBox="0 0 24 24"><path d="M4 12h16m-6-6 6 6-6 6"/></symbol>
+      <symbol id="icon-calendar" viewBox="0 0 24 24"><rect x="4" y="5" width="16" height="16" rx="3"/><path d="M8 3v4m8-4v4M4 11h16m-11 4h2m2 3h2"/></symbol>
+      <symbol id="icon-pin" viewBox="0 0 24 24"><path d="M19 10c0 5-7 11-7 11S5 15 5 10a7 7 0 1 1 14 0Z"/><circle cx="12" cy="10" r="2.5"/></symbol>
+      <symbol id="icon-bowl" viewBox="0 0 24 24"><path d="M3 11h18a9 9 0 0 1-18 0ZM8 21h8M8 7c-3-3 3-3 0-6m8 6c-3-3 3-3 0-6"/></symbol>
+      <symbol id="icon-film" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 4v16M17 4v16M3 9h4m-4 6h4m10-6h4m-4 6h4"/></symbol>
+      <symbol id="icon-chevron" viewBox="0 0 24 24"><path d="m7 10 5 5 5-5"/></symbol>
+      <symbol id="icon-close" viewBox="0 0 24 24"><path d="m6 6 12 12M6 18 18 6"/></symbol>
+      <symbol id="icon-trash" viewBox="0 0 24 24"><path d="M3 6h18M9 6V3h6v3M5 6l1 15h12l1-15M10 10v7m4-7v7"/></symbol>
+    </svg>
+
+    <header class="site-header page-width">
+      <a class="brand" href="./" aria-label="Movie Night, inicio">
+        <span class="brand-mark"><svg class="icon"><use href="#icon-moon"/></svg></span>
+        movie<span class="brand-light">night</span><span class="brand-dot">.</span>
+      </a>
+      <div class="theme-control">
+        <button id="theme-toggle" class="theme-toggle" type="button" aria-expanded="false" aria-controls="theme-menu">
+          <span class="theme-dot" aria-hidden="true"></span>
+          <span id="theme-label">Spooky season</span>
+          <svg class="icon small"><use href="#icon-chevron"/></svg>
+        </button>
+        <fieldset id="theme-menu" class="theme-menu" hidden>
+          <legend>Elige el ambiente</legend>
+          <label><input type="radio" name="theme" value="spooky" checked><span class="swatch swatch-spooky"></span>Spooky season</label>
+          <label><input type="radio" name="theme" value="cozy"><span class="swatch swatch-cozy"></span>Cozy oto&ntilde;o</label>
+          <label><input type="radio" name="theme" value="sci-fi"><span class="swatch swatch-sci-fi"></span>Sci-fi</label>
+          <label><input type="radio" name="theme" value="fantasy"><span class="swatch swatch-fantasy"></span>Fantas&iacute;a</label>
+          <label><input type="radio" name="theme" value="christmas"><span class="swatch swatch-christmas"></span>Navidad</label>
+        </fieldset>
+      </div>
+    </header>
+
+    <main id="main" class="page-width">
+      <noscript><p class="notice">Activa JavaScript para elegir pel&iacute;culas y guardar tus planes. No necesitas una cuenta ni un servidor.</p></noscript>
+      <p id="storage-notice" class="notice" role="alert" hidden></p>
+
+      <header class="intro">
+        <h1>Una peli. Algo rico. <em>Y ya.</em></h1>
+        <p>Menos decidir, m&aacute;s disfrutar de la noche.</p>
+      </header>
+
+      <!-- El generador y el formulario comparten una seleccion, guardada como borrador. -->
+      <section id="planner" class="planner" aria-label="Crea tu movie night">
+          <div class="planner-toolbar">
+            <span class="eyebrow">EL PLAN DE HOY</span>
+            <details id="picker-options" class="picker-options">
+              <summary>Preferencias <svg class="icon small"><use href="#icon-chevron"/></svg></summary>
+              <div class="picker-filters">
+                <label for="movie-genre">Universo
+                  <select id="movie-genre">
+                    <option value="all">Todos los universos</option>
+                    <option value="spooky">Spooky season</option>
+                    <option value="cozy">Cozy oto&ntilde;o</option>
+                    <option value="sci-fi">Sci-fi</option>
+                    <option value="fantasy">Fantas&iacute;a</option>
+                    <option value="christmas">Navidad</option>
+                  </select>
+                </label>
+                <label class="checkbox-label"><input id="pending-only" type="checkbox" checked>Solo pendientes</label>
+                <label class="checkbox-label"><input id="auto-food" type="checkbox" checked>Combinar comida al elegir pel&iacute;cula</label>
+              </div>
+            </details>
+          </div>
+
+          <div class="movie-feature">
+            <div class="movie-art" aria-hidden="true">
+              <svg class="mood-illustration" viewBox="0 0 280 300" xmlns="http://www.w3.org/2000/svg">
+                <circle cx="140" cy="133" r="99" fill="var(--art-halo)"/>
+                <g fill="var(--art-ink)" opacity=".7">
+                  <path d="m46 59 3 7 7 3-7 3-3 7-3-7-7-3 7-3ZM226 80l3 8 8 3-8 3-3 8-3-8-8-3 8-3ZM204 34l2 5 5 2-5 2-2 5-2-5-5-2 5-2Z"/>
+                  <circle cx="75" cy="32" r="2"/><circle cx="237" cy="156" r="2"/><circle cx="38" cy="157" r="2"/>
+                </g>
+                <g class="mood-art mood-spooky">
+                  <circle cx="180" cy="84" r="34" fill="var(--art-light)"/>
+                  <path d="M50 238V133l38-32 38 32v25h31v-48l36-30 35 30v128Z" fill="var(--art-ink)"/>
+                  <path d="m43 135 45-43 45 43m16-22 44-42 43 42" fill="none" stroke="var(--art-ink)" stroke-width="8" stroke-linecap="round" stroke-linejoin="round"/>
+                  <g fill="var(--art-light)"><path d="M76 137h23v31H76ZM182 116h22v28h-22ZM178 167h26v24h-26ZM84 238v-31a16 16 0 0 1 32 0v31Z"/></g>
+                  <path d="M65 246c-1-29 7-51 27-51s27 22 26 51l-9-6-9 7-10-7-12 7-6-6Z" fill="var(--art-light)" stroke="var(--art-ink)" stroke-width="3"/>
+                  <ellipse cx="84" cy="218" rx="3" ry="5" fill="var(--art-ink)"/><ellipse cx="101" cy="218" rx="3" ry="5" fill="var(--art-ink)"/>
+                  <path d="M104 77q-14-18-25-11l6-13 21 7 8-7 8 7 21-7 6 13q-12-7-27 11l-9-6Z" fill="var(--art-ink)"/>
+                  <path d="M33 247q105-19 212 0" fill="none" stroke="var(--art-ink)" stroke-width="4" stroke-linecap="round"/>
+                  <ellipse cx="202" cy="237" rx="24" ry="18" fill="var(--art-accent)" stroke="var(--art-ink)" stroke-width="3"/>
+                  <path d="m204 217 3-9m-16 28 5-5m11 5 5-5m-15 13h10" fill="none" stroke="var(--art-ink)" stroke-width="3" stroke-linecap="round"/>
+                </g>
+                <g class="mood-art mood-cozy">
+                  <path d="M73 134h122v55a55 55 0 0 1-110 0Z" fill="var(--art-accent)" stroke="var(--art-ink)" stroke-width="5"/>
+                  <path d="M195 146h13a26 26 0 0 1 0 52h-17M112 111c-25-24 24-32 0-60m32 60c-25-24 24-32 0-60m32 60c-25-24 24-32 0-60" fill="none" stroke="var(--art-ink)" stroke-width="5" stroke-linecap="round"/>
+                  <ellipse cx="139" cy="243" rx="84" ry="10" fill="var(--art-ink)"/>
+                  <path d="M140 201c-45-25-26-48-10-34l10 10 10-10c17-14 34 9-10 34Z" fill="var(--art-light)"/>
+                  <path d="m44 198 19 7-8 7 12 9-14 7-5 19-10-19-16-5 13-10-5-12Z" fill="var(--art-light)" stroke="var(--art-ink)" stroke-width="3"/>
+                </g>
+                <g class="mood-art mood-sci-fi">
+                  <circle cx="141" cy="151" r="68" fill="var(--art-accent)" stroke="var(--art-ink)" stroke-width="4"/>
+                  <path d="M79 124c-105 66-24 101 104 37s68-88 19-67" fill="none" stroke="var(--art-ink)" stroke-width="15" stroke-linecap="round"/>
+                  <path d="M79 124c-105 66-24 101 104 37s68-88 19-67" fill="none" stroke="var(--art-light)" stroke-width="7" stroke-linecap="round"/>
+                  <circle cx="118" cy="122" r="12" fill="var(--art-light)" opacity=".65"/>
+                  <path d="m159 246 23-27 2 17 16 4-31 15Z" fill="var(--art-light)" stroke="var(--art-ink)" stroke-width="3"/>
+                  <path d="m190 242 12-25" stroke="var(--art-accent)" stroke-width="5" stroke-linecap="round"/>
+                </g>
+                <g class="mood-art mood-fantasy">
+                  <path d="M64 243V136h42v107m67 0V136h42v107M105 242V173h69v69" fill="var(--art-light)" stroke="var(--art-ink)" stroke-width="4"/>
+                  <path d="m55 137 31-55 31 55Zm108 0 31-55 31 55ZM101 174l39-69 39 69Z" fill="var(--art-accent)" stroke="var(--art-ink)" stroke-width="4" stroke-linejoin="round"/>
+                  <path d="M128 243v-32a12 12 0 0 1 24 0v32M79 156h13v22H79Zm109 0h13v22h-13Z" fill="var(--art-ink)"/>
+                  <path d="M140 107V63l25 11-25 10M44 245h191" fill="none" stroke="var(--art-ink)" stroke-width="4" stroke-linecap="round"/>
+                </g>
+                <g class="mood-art mood-christmas">
+                  <path d="M128 213h24v37h-24Z" fill="var(--art-ink)"/>
+                  <path d="m140 64-40 58h19l-49 57h24l-36 43h164l-36-43h24l-49-57h19Z" fill="var(--art-accent)" stroke="var(--art-ink)" stroke-width="4" stroke-linejoin="round"/>
+                  <path d="m140 40 6 13 15 2-11 11 3 15-13-7-13 7 3-15-11-11 15-2Z" fill="var(--art-light)" stroke="var(--art-ink)" stroke-width="3"/>
+                  <g fill="var(--art-light)"><circle cx="128" cy="117" r="7"/><circle cx="151" cy="149" r="7"/><circle cx="108" cy="184" r="7"/><circle cx="163" cy="200" r="7"/></g>
+                  <path d="M184 226h45v29h-45Z" fill="var(--art-light)" stroke="var(--art-ink)" stroke-width="3"/>
+                  <path d="M206 226v29m-22-14h45m-23-15c-31-1-17-30 0 0 19-27 28 0 0 0Z" fill="none" stroke="var(--art-ink)" stroke-width="3"/>
+                </g>
+              </svg>
+              <span id="art-caption" class="art-caption">Un poquito de magia.<br>Un poquito de misterio.</span>
+            </div>
+            <div class="movie-details">
+              <span id="movie-badge" class="eyebrow">QUE DECIDA EL DESTINO</span>
+              <div aria-live="polite" aria-atomic="true">
+                <h2 id="movie-title" tabindex="-1">Tu pr&oacute;xima favorita te espera.</h2>
+                <p id="movie-meta" class="movie-meta">20 pel&iacute;culas en tu colecci&oacute;n.</p>
+                <p id="movie-description" class="movie-description">Pulsa el bot&oacute;n y descubre qu&eacute; ver esta noche.</p>
+              </div>
+              <div class="movie-picker-actions">
+                <button id="random-movie" class="button button-primary" type="button"><svg class="icon"><use href="#icon-shuffle"/></svg>Elegir pel&iacute;cula aleatoria</button>
+                <p id="candidate-count" class="helper">20 pel&iacute;culas en el bombo</p>
+              </div>
+              <div class="food-line">
+                <svg class="icon"><use href="#icon-bowl"/></svg>
+                <div class="food-copy" aria-live="polite" aria-atomic="true">
+                  <span class="food-label">Para acompa&ntilde;ar</span>
+                  <p id="food-name">Comida por elegir</p>
+                  <p id="food-description" class="sr-only">Elige una comida para tu plan.</p>
+                </div>
+                <button id="random-food" class="button button-text" type="button" aria-label="Cambiar comida: elegir comida aleatoria"><svg class="icon small"><use href="#icon-shuffle"/></svg>Cambiar</button>
+              </div>
+            </div>
+          </div>
+            <form id="plan-form" class="plan-form" aria-label="Fecha y lugar de tu plan">
+              <div class="plan-fields">
+                <label for="plan-date">Fecha<input id="plan-date" name="date" type="date" required></label>
+                <label for="plan-place">Lugar<input id="plan-place" name="place" type="text" placeholder="Mi sof&aacute;" maxlength="120" required></label>
+                <button id="save-plan" class="button button-secondary" type="submit"><svg class="icon small"><use href="#icon-plus"/></svg>Guardar plan</button>
+              </div>
+              <p id="plan-hint" class="helper">Elige una peli y una comida para empezar.</p>
+            </form>
+      </section>
+
+      <!-- Una sola lista visible a la vez, sin perder la coleccion ni el historial. -->
+      <div id="organizer" class="organizer">
+        <div class="view-tabs" role="group" aria-label="Tus listas">
+          <button type="button" data-view="plans" aria-pressed="true" aria-controls="nights">Mis noches <span id="nights-total" class="count">0</span></button>
+          <button type="button" data-view="movies" aria-pressed="false" aria-controls="collection">Mi colecci&oacute;n <span id="collection-total" class="count">20</span></button>
+        </div>
+        <section id="collection" aria-labelledby="collection-heading" hidden>
+          <h2 id="collection-heading" class="sr-only">Mi colecci&oacute;n</h2>
+          <div class="list-toolbar">
+            <div class="tab-bar" role="group" aria-label="Filtrar pel&iacute;culas">
+              <button class="tab-button" type="button" data-movie-tab="pending" aria-pressed="true">Pendientes <span id="pending-count" class="count">20</span></button>
+              <button class="tab-button" type="button" data-movie-tab="watched" aria-pressed="false">Ya vistas <span id="watched-count" class="count">0</span></button>
+            </div>
+            <button id="show-add-movie" class="button button-text" type="button" aria-expanded="false" aria-controls="add-movie-form"><svg class="icon small"><use href="#icon-plus"/></svg>A&ntilde;adir peli</button>
+          </div>
+          <form id="add-movie-form" class="add-movie-form" hidden>
+            <div class="add-form-heading"><h3>Una m&aacute;s para la lista</h3><button id="cancel-add-movie" class="icon-button" type="button" aria-label="Cerrar formulario"><svg class="icon small"><use href="#icon-close"/></svg></button></div>
+            <label for="new-movie-title">T&iacute;tulo de la pel&iacute;cula<input id="new-movie-title" name="title" type="text" maxlength="120" placeholder="Esa que siempre has querido ver..." required></label>
+            <div class="add-form-bottom">
+              <label for="new-movie-genre">Universo<select id="new-movie-genre" name="genre"><option value="spooky">Spooky season</option><option value="cozy">Cozy oto&ntilde;o</option><option value="sci-fi">Sci-fi</option><option value="fantasy">Fantas&iacute;a</option><option value="christmas">Navidad</option></select></label>
+              <button class="button button-dark" type="submit">A&ntilde;adir a pendientes</button>
+            </div>
+          </form>
+          <ul id="movie-list" class="movie-list" aria-label="Pel&iacute;culas pendientes"></ul>
+          <div id="movie-empty" class="empty-state" hidden><svg class="icon"><use href="#icon-film"/></svg><h3 id="movie-empty-title"></h3><p id="movie-empty-description"></p></div>
+          <p class="collection-footnote"><svg class="icon small"><use href="#icon-check"/></svg>Un clic en el c&iacute;rculo y otra historia vivida.</p>
+        </section>
+
+        <section id="nights" aria-labelledby="nights-heading">
+          <h2 id="nights-heading" class="sr-only">Mis noches</h2>
+          <div class="list-toolbar">
+            <div class="tab-bar" role="group" aria-label="Filtrar planes">
+              <button class="tab-button" type="button" data-plan-tab="scheduled" aria-pressed="true">Programadas <span id="scheduled-count" class="count">0</span></button>
+              <button class="tab-button" type="button" data-plan-tab="completed" aria-pressed="false">Completadas <span id="completed-count" class="count">0</span></button>
+            </div>
+          </div>
+          <ul id="plan-list" class="plan-list" aria-label="Movie nights programadas"></ul>
+          <div id="plans-empty" class="empty-state">
+            <svg class="icon"><use href="#icon-calendar"/></svg>
+            <h3 id="plans-empty-title">Todav&iacute;a no hay planes.</h3>
+            <p id="plans-empty-description">Elige una peli y guarda tu primera noche.</p>
+            <a id="empty-plan-link" class="text-link" href="#planner">Crear un plan <span aria-hidden="true">&rarr;</span></a>
+          </div>
+          <p class="collection-footnote">Completar una noche marca la pel&iacute;cula como vista.</p>
+        </section>
+      </div>
+
+      <footer class="site-footer"><svg class="icon small"><use href="#icon-moon"/></svg>Sin cuentas. Tus datos se guardan en este navegador.</footer>
+    </main>
+
+    <!-- Las plantillas se clonan y rellenan con textContent, incluso para titulos personalizados. -->
+    <template id="movie-row-template">
+      <li class="movie-row">
+        <button class="watch-toggle" type="button"><svg class="icon small"><use href="#icon-check"/></svg></button>
+        <div class="movie-row-copy"><h3 class="movie-row-title"></h3><p class="movie-row-meta"></p></div>
+        <button class="icon-button choose-movie" type="button" title="Elegir para mi plan"><svg class="icon small"><use href="#icon-arrow"/></svg></button>
+      </li>
+    </template>
+    <template id="plan-row-template">
+      <li class="plan-row">
+        <span class="plan-date-badge"><svg class="icon small"><use href="#icon-calendar"/></svg><time></time></span>
+        <div class="plan-row-copy">
+          <h3 class="plan-movie-title"></h3>
+          <div class="plan-metadata">
+            <p class="plan-detail"><svg class="icon small"><use href="#icon-bowl"/></svg><span class="plan-food"></span></p>
+            <p class="plan-detail"><svg class="icon small"><use href="#icon-pin"/></svg><span class="plan-location"></span></p>
+          </div>
+        </div>
+        <div class="plan-actions">
+          <button class="button button-secondary complete-plan" type="button"><svg class="icon small"><use href="#icon-check"/></svg><span></span></button>
+          <button class="icon-button delete-plan" type="button"><svg class="icon small"><use href="#icon-trash"/></svg></button>
+        </div>
+      </li>
+    </template>
+    <div id="toast" class="toast" role="status" aria-live="polite" aria-atomic="true" hidden></div>
+  </body>
+</html>

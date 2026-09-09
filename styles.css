@@ -92,6 +92,11 @@ input[type="checkbox"], input[type="radio"] { width: 16px; height: 16px; margin:
 .brand-light { font-weight: 450; }
 .brand-dot { color: var(--accent); }
 .brand-mark { display: grid; place-items: center; width: 33px; height: 33px; margin-right: 9px; border-radius: 10px; background: var(--accent); color: #fff; transform: rotate(-8deg); }
+.header-controls { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 10px; }
+.language-toggle { display: flex; flex-shrink: 0; padding: 3px; border: 1px solid var(--border); border-radius: 24px; }
+.language-toggle button { min-height: 36px; padding: 6px 11px; border: 0; border-radius: 20px; background: transparent; color: var(--muted); font-size: 12px; }
+.language-toggle button[aria-pressed="true"] { background: var(--accent); color: #fff; }
+.language-toggle button:hover:not([aria-pressed="true"]) { background: var(--accent-soft); color: var(--accent); }
 .theme-control { position: relative; z-index: 4; }
 .theme-toggle { display: flex; align-items: center; gap: 9px; min-height: 40px; padding: 8px 12px; background: transparent; border: 1px solid var(--border); border-radius: 24px; font-size: 12px; }
 .theme-dot { width: 8px; height: 8px; background: var(--accent); border-radius: 50%; }
@@ -194,6 +199,8 @@ h1 em { color: var(--accent); }
   .plan-date-badge { grid-column: 1 / -1; }
 }
 @media (max-width: 600px) {
+  .site-header { flex-wrap: wrap; padding-block: 14px; }
+  .header-controls { width: 100%; justify-content: space-between; }
   .plan-fields { grid-template-columns: minmax(0, 1fr) minmax(0, 1.3fr); }
   #save-plan { grid-column: 1 / -1; }
   .food-line { gap: 9px; }

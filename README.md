@@ -1,6 +1,6 @@
 # Movie Night
 
-A small, Spanish-language movie-night planner built with plain HTML, CSS, and
+A small, bilingual English/Spanish movie-night planner built with plain HTML, CSS, and
 JavaScript. No account, backend, API key, package manager, or build step.
 
 ## Project structure
@@ -10,6 +10,7 @@ movie-night/
   index.html          Accessible page, forms, templates, and original SVG artwork
   styles.css          Responsive layout and five theme palettes
   app.js              Catalog, random generators, plans, and localStorage
+  i18n.js             English and Spanish interface and catalog translations
   assets/
     favicon.svg       Original app icon
   .nojekyll           Publish the static files without Jekyll processing
@@ -44,22 +45,28 @@ as well as on a custom domain. There are no client-side routes to configure.
 
 ## Using the app
 
+- Use the **English / Espanol** toggle in the header to change language instantly.
+  Spanish is the default, including for existing collections. Your choice is
+  remembered in this browser and shared with other open tabs on the same origin.
+  Interface text, built-in movie titles and descriptions, food suggestions, dates,
+  and app messages follow the selected language. Custom movie titles and locations
+  stay exactly as entered, and switching does not clear unfinished forms.
 - The main area is one flow: choose a movie, change the accompanying food if
   needed, set the date and location, and save the plan.
-- **Elegir pelicula aleatoria** picks a movie and, by default, food too.
-  **Cambiar**, next to the food, picks food independently.
-- Open **Preferencias** for the universe filter, **Solo pendientes**, and the
+- **Pick a random movie** picks a movie and, by default, food too.
+  **Change**, next to the food, picks food independently.
+- Open **Preferences** for the universe filter, **Unwatched only**, and the
   option to automatically pair food with a movie.
-- **Mis noches** and **Mi coleccion** switch between two simple lists. Only one
+- **My nights** and **My collection** switch between two simple lists. Only one
   list is visible at a time; the app remembers your last view.
-- In **Mi coleccion**, **Anadir peli** adds a custom movie to one of the five universes. Titles
+- In **My collection**, **Add a movie** adds a custom movie to one of the five universes. Titles
   must be nonempty and are limited to 120 characters; duplicates are rejected.
 - The circle beside each movie switches it between pending and watched.
   The arrow selects that exact movie for a plan, including movies already watched.
 - Choose a movie, food, date, and location to save a movie night. Dates are local,
   not UTC, and past dates are allowed when recording an earlier night.
-- **Programadas** lists unfinished plans by date. Completing a plan moves it to
-  **Completadas** and marks its movie as watched.
+- **Scheduled** lists unfinished plans by date. Completing a plan moves it to
+  **Completed** and marks its movie as watched.
 - Reopening or deleting a plan does not erase viewing history. Use the collection
   to mark a movie as pending again. Deleting a plan asks for confirmation.
 - The theme button switches between spooky season (default), cozy autumn,
@@ -75,16 +82,22 @@ as well as on a custom domain. There are no client-side routes to configure.
 | `renderPlans()` | Render scheduled or completed nights and their counts. |
 | `addMovie(event)` | Validate and add a custom movie from the form. |
 | `toggleWatched(id)` | Switch a movie between pending and watched. |
+| `renderLanguage()` | Apply the selected language to page copy, metadata, and form errors. |
 
 Both generators avoid an immediate repeat when more than one option is available.
 The seed catalog and food list live in `INITIAL_MOVIES` and `FOODS` in `app.js`.
-Changing the seed list affects new browser collections, not previously saved ones.
+Their translated copy lives in `i18n.js`, alongside interface messages, universe
+names, and mood captions. Keep both language dictionaries in sync when adding copy.
+Built-in movies are translated by ID at display time; duplicate detection recognizes
+both their English and Spanish titles.
+Changing the seed list's metadata affects new browser collections, not previously
+saved ones. Translation updates apply to existing built-in movies as well.
 The five palettes are CSS variables in `styles.css`.
 
 ## Storage and privacy
 
 Movies, watched status, plans, the current selection, date/location draft, filters,
-theme, and active list are stored in `localStorage` under `movie-night:v1`.
+theme, language, and active list are stored in `localStorage` under `movie-night:v1`.
 Previously saved collections and plans continue to work without resetting data. Nothing is sent to
 a server. Tabs on the same origin listen for saved changes; if two tabs write at
 the same instant, the last write wins.

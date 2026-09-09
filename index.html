@@ -4,14 +4,15 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="theme-color" content="#faf7f2">
-    <meta name="description" content="Una peli, algo rico y un buen plan. Organiza tus movie nights y guarda tu colección, sin cuentas ni complicaciones.">
-    <title>Movie Night &mdash; Tu pr&oacute;ximo buen plan</title>
+    <meta name="description" data-i18n-content="pageDescription" content="Una peli, algo rico y un buen plan. Organiza tus noches de cine y guarda tu colección, sin cuentas ni complicaciones.">
+    <title data-i18n="pageTitle">Movie Night &mdash; Tu pr&oacute;ximo buen plan</title>
     <link rel="icon" href="./assets/favicon.svg" type="image/svg+xml">
     <link rel="stylesheet" href="./styles.css">
+    <script src="./i18n.js" defer></script>
     <script src="./app.js" defer></script>
   </head>
   <body>
-    <a class="skip-link" href="#main">Saltar al contenido</a>
+    <a class="skip-link" href="#main" data-i18n="skipLink">Saltar al contenido</a>
 
     <!-- Iconos locales reutilizables: no hacen falta librerias ni servicios externos. -->
     <svg class="icon-definitions" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
@@ -30,55 +31,61 @@
     </svg>
 
     <header class="site-header page-width">
-      <a class="brand" href="./" aria-label="Movie Night, inicio">
+      <a class="brand" href="./" aria-label="Movie Night, inicio" data-i18n-aria-label="homeLabel">
         <span class="brand-mark"><svg class="icon"><use href="#icon-moon"/></svg></span>
         movie<span class="brand-light">night</span><span class="brand-dot">.</span>
       </a>
-      <div class="theme-control">
+      <div class="header-controls">
+        <div class="language-toggle" role="group" aria-label="Idioma" data-i18n-aria-label="languageLabel">
+          <button type="button" data-language="en" lang="en" aria-pressed="false">English</button>
+          <button type="button" data-language="es" lang="es" aria-pressed="true">Espa&ntilde;ol</button>
+        </div>
+        <div class="theme-control">
         <button id="theme-toggle" class="theme-toggle" type="button" aria-expanded="false" aria-controls="theme-menu">
           <span class="theme-dot" aria-hidden="true"></span>
-          <span id="theme-label">Spooky season</span>
+          <span id="theme-label">Temporada de sustos</span>
           <svg class="icon small"><use href="#icon-chevron"/></svg>
         </button>
         <fieldset id="theme-menu" class="theme-menu" hidden>
-          <legend>Elige el ambiente</legend>
-          <label><input type="radio" name="theme" value="spooky" checked><span class="swatch swatch-spooky"></span>Spooky season</label>
-          <label><input type="radio" name="theme" value="cozy"><span class="swatch swatch-cozy"></span>Cozy oto&ntilde;o</label>
-          <label><input type="radio" name="theme" value="sci-fi"><span class="swatch swatch-sci-fi"></span>Sci-fi</label>
-          <label><input type="radio" name="theme" value="fantasy"><span class="swatch swatch-fantasy"></span>Fantas&iacute;a</label>
-          <label><input type="radio" name="theme" value="christmas"><span class="swatch swatch-christmas"></span>Navidad</label>
+          <legend data-i18n="chooseMood">Elige el ambiente</legend>
+          <label><input type="radio" name="theme" value="spooky" checked><span class="swatch swatch-spooky"></span><span data-i18n-genre="spooky">Temporada de sustos</span></label>
+          <label><input type="radio" name="theme" value="cozy"><span class="swatch swatch-cozy"></span><span data-i18n-genre="cozy">Oto&ntilde;o acogedor</span></label>
+          <label><input type="radio" name="theme" value="sci-fi"><span class="swatch swatch-sci-fi"></span><span data-i18n-genre="sci-fi">Ciencia ficci&oacute;n</span></label>
+          <label><input type="radio" name="theme" value="fantasy"><span class="swatch swatch-fantasy"></span><span data-i18n-genre="fantasy">Fantas&iacute;a</span></label>
+          <label><input type="radio" name="theme" value="christmas"><span class="swatch swatch-christmas"></span><span data-i18n-genre="christmas">Navidad</span></label>
         </fieldset>
+        </div>
       </div>
     </header>
 
     <main id="main" class="page-width">
-      <noscript><p class="notice">Activa JavaScript para elegir pel&iacute;culas y guardar tus planes. No necesitas una cuenta ni un servidor.</p></noscript>
+      <noscript><p class="notice"><span lang="es">Activa JavaScript para cambiar de idioma, elegir pel&iacute;culas y guardar tus planes. No necesitas una cuenta ni un servidor.</span><br><span lang="en">Enable JavaScript to switch languages, choose movies, and save your plans. No account or server needed.</span></p></noscript>
       <p id="storage-notice" class="notice" role="alert" hidden></p>
 
       <header class="intro">
-        <h1>Una peli. Algo rico. <em>Y ya.</em></h1>
-        <p>Menos decidir, m&aacute;s disfrutar de la noche.</p>
+        <h1><span data-i18n="intro">Una peli. Algo rico.</span> <em data-i18n="introEmphasis">Y ya.</em></h1>
+        <p data-i18n="tagline">Menos decidir, m&aacute;s disfrutar de la noche.</p>
       </header>
 
       <!-- El generador y el formulario comparten una seleccion, guardada como borrador. -->
-      <section id="planner" class="planner" aria-label="Crea tu movie night">
+      <section id="planner" class="planner" aria-label="Crea tu noche de cine" data-i18n-aria-label="plannerLabel">
           <div class="planner-toolbar">
-            <span class="eyebrow">EL PLAN DE HOY</span>
+            <span class="eyebrow" data-i18n="todayPlan">EL PLAN DE HOY</span>
             <details id="picker-options" class="picker-options">
-              <summary>Preferencias <svg class="icon small"><use href="#icon-chevron"/></svg></summary>
+              <summary><span data-i18n="preferences">Preferencias</span> <svg class="icon small"><use href="#icon-chevron"/></svg></summary>
               <div class="picker-filters">
-                <label for="movie-genre">Universo
+                <label for="movie-genre"><span data-i18n="universe">Universo</span>
                   <select id="movie-genre">
-                    <option value="all">Todos los universos</option>
-                    <option value="spooky">Spooky season</option>
-                    <option value="cozy">Cozy oto&ntilde;o</option>
-                    <option value="sci-fi">Sci-fi</option>
-                    <option value="fantasy">Fantas&iacute;a</option>
-                    <option value="christmas">Navidad</option>
+                    <option value="all" data-i18n="allUniverses">Todos los universos</option>
+                    <option value="spooky" data-i18n-genre="spooky">Temporada de sustos</option>
+                    <option value="cozy" data-i18n-genre="cozy">Oto&ntilde;o acogedor</option>
+                    <option value="sci-fi" data-i18n-genre="sci-fi">Ciencia ficci&oacute;n</option>
+                    <option value="fantasy" data-i18n-genre="fantasy">Fantas&iacute;a</option>
+                    <option value="christmas" data-i18n-genre="christmas">Navidad</option>
                   </select>
                 </label>
-                <label class="checkbox-label"><input id="pending-only" type="checkbox" checked>Solo pendientes</label>
-                <label class="checkbox-label"><input id="auto-food" type="checkbox" checked>Combinar comida al elegir pel&iacute;cula</label>
+                <label class="checkbox-label"><input id="pending-only" type="checkbox" checked><span data-i18n="pendingOnly">Solo pendientes</span></label>
+                <label class="checkbox-label"><input id="auto-food" type="checkbox" checked><span data-i18n="autoFood">Combinar comida al elegir pel&iacute;cula</span></label>
               </div>
             </details>
           </div>
@@ -143,25 +150,25 @@
                 <p id="movie-description" class="movie-description">Pulsa el bot&oacute;n y descubre qu&eacute; ver esta noche.</p>
               </div>
               <div class="movie-picker-actions">
-                <button id="random-movie" class="button button-primary" type="button"><svg class="icon"><use href="#icon-shuffle"/></svg>Elegir pel&iacute;cula aleatoria</button>
+                <button id="random-movie" class="button button-primary" type="button"><svg class="icon"><use href="#icon-shuffle"/></svg><span data-i18n="pickMovie">Elegir pel&iacute;cula aleatoria</span></button>
                 <p id="candidate-count" class="helper">20 pel&iacute;culas en el bombo</p>
               </div>
               <div class="food-line">
                 <svg class="icon"><use href="#icon-bowl"/></svg>
                 <div class="food-copy" aria-live="polite" aria-atomic="true">
-                  <span class="food-label">Para acompa&ntilde;ar</span>
+                  <span class="food-label" data-i18n="foodLabel">Para acompa&ntilde;ar</span>
                   <p id="food-name">Comida por elegir</p>
                   <p id="food-description" class="sr-only">Elige una comida para tu plan.</p>
                 </div>
-                <button id="random-food" class="button button-text" type="button" aria-label="Cambiar comida: elegir comida aleatoria"><svg class="icon small"><use href="#icon-shuffle"/></svg>Cambiar</button>
+                <button id="random-food" class="button button-text" type="button" aria-label="Cambiar comida: elegir comida aleatoria" data-i18n-aria-label="changeFoodLabel"><svg class="icon small"><use href="#icon-shuffle"/></svg><span data-i18n="changeFood">Cambiar</span></button>
               </div>
             </div>
           </div>
-            <form id="plan-form" class="plan-form" aria-label="Fecha y lugar de tu plan">
+            <form id="plan-form" class="plan-form" aria-label="Fecha y lugar de tu plan" data-i18n-aria-label="planFormLabel" novalidate>
               <div class="plan-fields">
-                <label for="plan-date">Fecha<input id="plan-date" name="date" type="date" required></label>
-                <label for="plan-place">Lugar<input id="plan-place" name="place" type="text" placeholder="Mi sof&aacute;" maxlength="120" required></label>
-                <button id="save-plan" class="button button-secondary" type="submit"><svg class="icon small"><use href="#icon-plus"/></svg>Guardar plan</button>
+                <label for="plan-date"><span data-i18n="date">Fecha</span><input id="plan-date" name="date" type="date" required></label>
+                <label for="plan-place"><span data-i18n="place">Lugar</span><input id="plan-place" name="place" type="text" placeholder="Mi sof&aacute;" data-i18n-placeholder="placePlaceholder" maxlength="120" required></label>
+                <button id="save-plan" class="button button-secondary" type="submit"><svg class="icon small"><use href="#icon-plus"/></svg><span data-i18n="savePlan">Guardar plan</span></button>
               </div>
               <p id="plan-hint" class="helper">Elige una peli y una comida para empezar.</p>
             </form>
@@ -169,52 +176,52 @@
 
       <!-- Una sola lista visible a la vez, sin perder la coleccion ni el historial. -->
       <div id="organizer" class="organizer">
-        <div class="view-tabs" role="group" aria-label="Tus listas">
-          <button type="button" data-view="plans" aria-pressed="true" aria-controls="nights">Mis noches <span id="nights-total" class="count">0</span></button>
-          <button type="button" data-view="movies" aria-pressed="false" aria-controls="collection">Mi colecci&oacute;n <span id="collection-total" class="count">20</span></button>
+        <div class="view-tabs" role="group" aria-label="Tus listas" data-i18n-aria-label="listsLabel">
+          <button type="button" data-view="plans" aria-pressed="true" aria-controls="nights"><span data-i18n="nights">Mis noches</span> <span id="nights-total" class="count">0</span></button>
+          <button type="button" data-view="movies" aria-pressed="false" aria-controls="collection"><span data-i18n="collection">Mi colecci&oacute;n</span> <span id="collection-total" class="count">20</span></button>
         </div>
         <section id="collection" aria-labelledby="collection-heading" hidden>
-          <h2 id="collection-heading" class="sr-only">Mi colecci&oacute;n</h2>
+          <h2 id="collection-heading" class="sr-only" data-i18n="collection">Mi colecci&oacute;n</h2>
           <div class="list-toolbar">
-            <div class="tab-bar" role="group" aria-label="Filtrar pel&iacute;culas">
-              <button class="tab-button" type="button" data-movie-tab="pending" aria-pressed="true">Pendientes <span id="pending-count" class="count">20</span></button>
-              <button class="tab-button" type="button" data-movie-tab="watched" aria-pressed="false">Ya vistas <span id="watched-count" class="count">0</span></button>
+            <div class="tab-bar" role="group" aria-label="Filtrar pel&iacute;culas" data-i18n-aria-label="movieFilterLabel">
+              <button class="tab-button" type="button" data-movie-tab="pending" aria-pressed="true"><span data-i18n="pending">Pendientes</span> <span id="pending-count" class="count">20</span></button>
+              <button class="tab-button" type="button" data-movie-tab="watched" aria-pressed="false"><span data-i18n="watched">Ya vistas</span> <span id="watched-count" class="count">0</span></button>
             </div>
-            <button id="show-add-movie" class="button button-text" type="button" aria-expanded="false" aria-controls="add-movie-form"><svg class="icon small"><use href="#icon-plus"/></svg>A&ntilde;adir peli</button>
+            <button id="show-add-movie" class="button button-text" type="button" aria-expanded="false" aria-controls="add-movie-form"><svg class="icon small"><use href="#icon-plus"/></svg><span data-i18n="addMovie">A&ntilde;adir peli</span></button>
           </div>
-          <form id="add-movie-form" class="add-movie-form" hidden>
-            <div class="add-form-heading"><h3>Una m&aacute;s para la lista</h3><button id="cancel-add-movie" class="icon-button" type="button" aria-label="Cerrar formulario"><svg class="icon small"><use href="#icon-close"/></svg></button></div>
-            <label for="new-movie-title">T&iacute;tulo de la pel&iacute;cula<input id="new-movie-title" name="title" type="text" maxlength="120" placeholder="Esa que siempre has querido ver..." required></label>
+          <form id="add-movie-form" class="add-movie-form" hidden novalidate>
+            <div class="add-form-heading"><h3 data-i18n="addMovieHeading">Una m&aacute;s para la lista</h3><button id="cancel-add-movie" class="icon-button" type="button" aria-label="Cerrar formulario" data-i18n-aria-label="closeForm"><svg class="icon small"><use href="#icon-close"/></svg></button></div>
+            <label for="new-movie-title"><span data-i18n="movieTitleLabel">T&iacute;tulo de la pel&iacute;cula</span><input id="new-movie-title" name="title" type="text" maxlength="120" placeholder="Esa que siempre has querido ver..." data-i18n-placeholder="movieTitlePlaceholder" required></label>
             <div class="add-form-bottom">
-              <label for="new-movie-genre">Universo<select id="new-movie-genre" name="genre"><option value="spooky">Spooky season</option><option value="cozy">Cozy oto&ntilde;o</option><option value="sci-fi">Sci-fi</option><option value="fantasy">Fantas&iacute;a</option><option value="christmas">Navidad</option></select></label>
-              <button class="button button-dark" type="submit">A&ntilde;adir a pendientes</button>
+              <label for="new-movie-genre"><span data-i18n="universe">Universo</span><select id="new-movie-genre" name="genre"><option value="spooky" data-i18n-genre="spooky">Temporada de sustos</option><option value="cozy" data-i18n-genre="cozy">Oto&ntilde;o acogedor</option><option value="sci-fi" data-i18n-genre="sci-fi">Ciencia ficci&oacute;n</option><option value="fantasy" data-i18n-genre="fantasy">Fantas&iacute;a</option><option value="christmas" data-i18n-genre="christmas">Navidad</option></select></label>
+              <button class="button button-dark" type="submit" data-i18n="addToPending">A&ntilde;adir a pendientes</button>
             </div>
           </form>
           <ul id="movie-list" class="movie-list" aria-label="Pel&iacute;culas pendientes"></ul>
           <div id="movie-empty" class="empty-state" hidden><svg class="icon"><use href="#icon-film"/></svg><h3 id="movie-empty-title"></h3><p id="movie-empty-description"></p></div>
-          <p class="collection-footnote"><svg class="icon small"><use href="#icon-check"/></svg>Un clic en el c&iacute;rculo y otra historia vivida.</p>
+          <p class="collection-footnote"><svg class="icon small"><use href="#icon-check"/></svg><span data-i18n="collectionFootnote">Un clic en el c&iacute;rculo y otra historia vivida.</span></p>
         </section>
 
         <section id="nights" aria-labelledby="nights-heading">
-          <h2 id="nights-heading" class="sr-only">Mis noches</h2>
+          <h2 id="nights-heading" class="sr-only" data-i18n="nights">Mis noches</h2>
           <div class="list-toolbar">
-            <div class="tab-bar" role="group" aria-label="Filtrar planes">
-              <button class="tab-button" type="button" data-plan-tab="scheduled" aria-pressed="true">Programadas <span id="scheduled-count" class="count">0</span></button>
-              <button class="tab-button" type="button" data-plan-tab="completed" aria-pressed="false">Completadas <span id="completed-count" class="count">0</span></button>
+            <div class="tab-bar" role="group" aria-label="Filtrar planes" data-i18n-aria-label="planFilterLabel">
+              <button class="tab-button" type="button" data-plan-tab="scheduled" aria-pressed="true"><span data-i18n="scheduled">Programadas</span> <span id="scheduled-count" class="count">0</span></button>
+              <button class="tab-button" type="button" data-plan-tab="completed" aria-pressed="false"><span data-i18n="completed">Completadas</span> <span id="completed-count" class="count">0</span></button>
             </div>
           </div>
-          <ul id="plan-list" class="plan-list" aria-label="Movie nights programadas"></ul>
+          <ul id="plan-list" class="plan-list" aria-label="Noches de cine programadas"></ul>
           <div id="plans-empty" class="empty-state">
             <svg class="icon"><use href="#icon-calendar"/></svg>
             <h3 id="plans-empty-title">Todav&iacute;a no hay planes.</h3>
             <p id="plans-empty-description">Elige una peli y guarda tu primera noche.</p>
-            <a id="empty-plan-link" class="text-link" href="#planner">Crear un plan <span aria-hidden="true">&rarr;</span></a>
+            <a id="empty-plan-link" class="text-link" href="#planner"><span data-i18n="createPlan">Crear un plan</span> <span aria-hidden="true">&rarr;</span></a>
           </div>
-          <p class="collection-footnote">Completar una noche marca la pel&iacute;cula como vista.</p>
+          <p class="collection-footnote" data-i18n="plansFootnote">Completar una noche marca la pel&iacute;cula como vista.</p>
         </section>
       </div>
 
-      <footer class="site-footer"><svg class="icon small"><use href="#icon-moon"/></svg>Sin cuentas. Tus datos se guardan en este navegador.</footer>
+      <footer class="site-footer"><svg class="icon small"><use href="#icon-moon"/></svg><span data-i18n="privacy">Sin cuentas. Tus datos se guardan en este navegador.</span></footer>
     </main>
 
     <!-- Las plantillas se clonan y rellenan con textContent, incluso para titulos personalizados. -->

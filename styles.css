@@ -122,6 +122,11 @@ h1 em { color: var(--accent); }
 [data-theme="spooky"] .mood-spooky, [data-theme="cozy"] .mood-cozy, [data-theme="sci-fi"] .mood-sci-fi, [data-theme="fantasy"] .mood-fantasy, [data-theme="christmas"] .mood-christmas { display: inline; }
 .art-caption { white-space: pre-line; font: italic 19px/1.3 Georgia, serif; }
 .movie-details { min-width: 0; }
+.movie-poster { display: block; width: 100%; height: auto; max-height: 440px; object-fit: contain; align-self: start; border-radius: 10px; background: var(--art-bg); }
+.movie-credits { display: grid; gap: 8px; margin: 15px 0 0; font-size: 12px; overflow-wrap: anywhere; }
+.movie-credits dt { font-weight: 600; }
+.movie-credits dd { margin: 0; color: var(--muted); }
+#picker-status { margin-top: 12px; color: var(--accent); }
 #movie-title { margin-top: 8px; font: 400 35px/1.2 Georgia, "Times New Roman", serif; letter-spacing: -.8px; overflow-wrap: anywhere; }
 .movie-meta { margin-top: 10px; color: var(--muted); font-size: 12px; }
 .movie-description { max-width: 58ch; margin-top: 13px; color: var(--muted); font-size: 14px; line-height: 1.75; overflow-wrap: anywhere; }
@@ -138,6 +143,17 @@ h1 em { color: var(--accent); }
 
 /* Only one list is displayed at a time. Rows use dividers rather than separate cards. */
 .organizer { margin-top: 30px; }
+.catalog-form { display: grid; grid-template-columns: minmax(0, 1fr) 180px auto; gap: 12px; align-items: end; margin-block: 20px 10px; }
+.catalog-status { margin-block: 18px; }
+.catalog-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 22px; list-style: none; padding: 0; margin: 0; }
+.catalog-card { display: flex; gap: 14px; padding-block: 16px; border-bottom: 1px solid var(--border); }
+.catalog-poster-wrap { position: relative; display: grid; place-items: center; width: 92px; height: 138px; flex-shrink: 0; background: var(--border); border-radius: 6px; overflow: hidden; }
+.catalog-poster { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+.catalog-card-copy { min-width: 0; }
+.catalog-title { font-size: 15px; overflow-wrap: anywhere; }
+.catalog-description { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: anywhere; margin-top: 6px; color: var(--muted); font-size: 12px; }
+.catalog-card .button { margin-top: 6px; padding-inline: 0; text-align: left; justify-content: flex-start; }
+.catalog-pagination { display: flex; justify-content: center; align-items: center; gap: 16px; margin-top: 24px; }
 .view-tabs { display: flex; gap: 30px; border-bottom: 1px solid var(--border); }
 .view-tabs > button { display: flex; align-items: center; gap: 9px; min-height: 49px; padding: 0 0 14px; border: 0; border-bottom: 2px solid transparent; background: transparent; color: var(--muted); font: 22px/1.2 Georgia, serif; }
 .view-tabs > button[aria-pressed="true"] { color: var(--ink); border-bottom-color: var(--accent); }
@@ -178,7 +194,8 @@ h1 em { color: var(--accent); }
 .add-form-heading h3 { font-size: 14px; font-weight: 600; }
 .add-form-bottom { display: flex; align-items: end; gap: 16px; margin-top: 14px; }
 .add-form-bottom label { flex: 1; min-width: 0; }
-.site-footer { display: flex; justify-content: center; align-items: center; gap: 7px; padding: 30px 0; margin-top: 18px; color: var(--muted); font-size: 11px; text-align: center; }
+.site-footer { display: flex; flex-direction: column; justify-content: center; align-items: center; gap: 16px; padding: 30px 0; margin-top: 18px; color: var(--muted); font-size: 11px; text-align: center; }
+.tmdb-attribution img { display: block; width: 100px; height: auto; margin: 0 auto 10px; }
 .toast { position: fixed; z-index: 5; bottom: 24px; left: 50%; transform: translateX(-50%); width: max-content; max-width: calc(100% - 32px); padding: 13px 21px; background: var(--dark); color: #fff; border-radius: 10px; box-shadow: 0 8px 32px #0003; font-size: 13px; text-align: center; }
 
 @media (max-width: 760px) {
@@ -194,6 +211,9 @@ h1 em { color: var(--accent); }
   .plan-date-badge { grid-column: 1 / -1; }
 }
 @media (max-width: 600px) {
+  .catalog-form { grid-template-columns: minmax(0, 1fr) auto; }
+  .catalog-form > label:first-child { grid-column: 1 / -1; }
+  .catalog-list { grid-template-columns: minmax(0, 1fr); gap: 0; }
   .plan-fields { grid-template-columns: minmax(0, 1fr) minmax(0, 1.3fr); }
   #save-plan { grid-column: 1 / -1; }
   .food-line { gap: 9px; }
@@ -213,6 +233,7 @@ h1 em { color: var(--accent); }
   .planner-toolbar { margin-bottom: 20px; }
   .movie-feature { grid-template-columns: minmax(0, 1fr); }
   .movie-art { display: none; }
+  .movie-poster { width: 150px; justify-self: center; }
   #movie-title { max-width: 20ch; font-size: 31px; }
   .movie-description { font-size: 14px; }
   .movie-picker-actions { gap: 9px; margin-top: 20px; }
@@ -228,7 +249,8 @@ h1 em { color: var(--accent); }
   .plan-actions { justify-self: end; }
   .plan-metadata { flex-direction: column; }
   .tab-button { padding-inline: 7px; }
-  .view-tabs > button { font-size: 20px; }
+  .view-tabs { gap: 15px; justify-content: space-between; }
+  .view-tabs > button { font-size: 17px; gap: 5px; }
   .collection-footnote { font-size: 10px; }
 }
 @media (max-width: 370px) {
@@ -239,8 +261,8 @@ h1 em { color: var(--accent); }
   .theme-dot { display: none; }
   h1 { font-size: 32px; }
   .picker-filters { width: 275px; }
-  .view-tabs { gap: 21px; }
-  .view-tabs > button { font-size: 19px; gap: 6px; }
+  .view-tabs { gap: 9px; }
+  .view-tabs > button { font-size: 15px; gap: 4px; }
   .add-form-bottom { flex-direction: column; align-items: stretch; }
 }
 @media (prefers-reduced-motion: reduce) {

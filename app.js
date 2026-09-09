@@ -1,6 +1,5 @@
 "use strict";
 
-// A local catalog keeps the app usable without API keys, downloads, or a backend.
 const STORAGE_KEY = "movie-night:v1";
 const GENRES = {
   spooky: "Spooky season",
@@ -9,6 +8,7 @@ const GENRES = {
   fantasy: "Fantas\u00eda",
   christmas: "Navidad",
 };
+const MOVIE_GENRES = { ...GENRES, general: "Otros g\u00e9neros" };
 const MOODS = {
   spooky: "Un poquito de magia.\nUn poquito de misterio.",
   cozy: "Una taza caliente.\nUna historia bonita.",
@@ -16,28 +16,6 @@ const MOODS = {
   fantasy: "La magia empieza\ncuando le das al play.",
   christmas: "Luces encendidas.\nCoraz\u00f3n calentito.",
 };
-const INITIAL_MOVIES = [
-  { id: "coraline", title: "Coraline", genre: "spooky", year: 2009, minutes: 100, description: "Una puerta secreta, otro mundo y una buena excusa para abrazar el coj\u00edn." },
-  { id: "hocus-pocus", title: "El retorno de las brujas", genre: "spooky", year: 1993, minutes: 96, description: "Brujas, travesuras y una noche con toda la magia de Halloween." },
-  { id: "beetlejuice", title: "Beetlejuice", genre: "spooky", year: 1988, minutes: 92, description: "Fantasmas con mucha personalidad y un caos deliciosamente extra\u00f1o." },
-  { id: "addams-family", title: "La familia Addams", genre: "spooky", year: 1991, minutes: 99, description: "Una familia peculiar que convierte lo macabro en un plan de lo m\u00e1s acogedor." },
-  { id: "fantastic-fox", title: "Fantastic Mr. Fox", genre: "cozy", year: 2009, minutes: 87, description: "Colores de oto\u00f1o, aventuras diminutas y un zorro que no sabe quedarse quieto." },
-  { id: "harry-sally", title: "Cuando Harry encontr\u00f3 a Sally", genre: "cozy", year: 1989, minutes: 96, description: "Paseos, conversaciones y esa sensaci\u00f3n de estar justo donde quieres estar." },
-  { id: "paddington-2", title: "Paddington 2", genre: "cozy", year: 2017, minutes: 103, description: "Un osito, un poco de mermelada y una dosis generosa de bondad." },
-  { id: "julie-julia", title: "Julie & Julia", genre: "cozy", year: 2009, minutes: 123, description: "Recetas, nuevos comienzos y ganas de cocinar algo rico al terminar." },
-  { id: "interstellar", title: "Interstellar", genre: "sci-fi", year: 2014, minutes: 169, description: "Un viaje entre las estrellas para recordar lo que nos conecta con casa." },
-  { id: "wall-e", title: "WALL\u00b7E", genre: "sci-fi", year: 2008, minutes: 98, description: "Un peque\u00f1o robot con un gran coraz\u00f3n. Prepara las palomitas y los pa\u00f1uelos." },
-  { id: "arrival", title: "La llegada", genre: "sci-fi", year: 2016, minutes: 116, description: "Una visita inesperada y una historia para seguir conversando despu\u00e9s." },
-  { id: "back-to-future", title: "Regreso al futuro", genre: "sci-fi", year: 1985, minutes: 116, description: "Una aventura a toda velocidad en la que llegar a tiempo lo es todo." },
-  { id: "spirited-away", title: "El viaje de Chihiro", genre: "fantasy", year: 2001, minutes: 125, description: "Un mundo de esp\u00edritus, valent\u00eda y peque\u00f1os detalles que se quedan contigo." },
-  { id: "howls-castle", title: "El castillo ambulante", genre: "fantasy", year: 2004, minutes: 119, description: "Un castillo que camina y una aventura que invita a mirar m\u00e1s all\u00e1 de las apariencias." },
-  { id: "stardust", title: "Stardust", genre: "fantasy", year: 2007, minutes: 127, description: "Estrellas ca\u00eddas, reinos secretos y un viaje con mucho encanto." },
-  { id: "princess-bride", title: "La princesa prometida", genre: "fantasy", year: 1987, minutes: 98, description: "Espadas, humor y un cuento perfecto para volver a creer en las aventuras." },
-  { id: "klaus", title: "Klaus", genre: "christmas", year: 2019, minutes: 96, description: "Una carta puede ser el comienzo de algo enorme. Una noche llena de calidez." },
-  { id: "home-alone", title: "Solo en casa", genre: "christmas", year: 1990, minutes: 103, description: "Trampas imposibles, luces navide\u00f1as y un cl\u00e1sico para compartir." },
-  { id: "the-holiday", title: "The Holiday", genre: "christmas", year: 2006, minutes: 136, description: "Cambiar de casa, bajar el ritmo y dejar un hueco para lo inesperado." },
-  { id: "elf", title: "Elf", genre: "christmas", year: 2003, minutes: 97, description: "Esp\u00edritu navide\u00f1o a lo grande, incluso lejos del Polo Norte." },
-];
 const FOODS = [
   { id: "pizza", name: "Pizza para compartir", description: "Tu favorita, reci\u00e9n hecha. La \u00faltima porci\u00f3n se negocia." },
   { id: "popcorn", name: "Palomitas de cine", description: "Dulces o saladas. El cl\u00e1sico que nunca falla." },
@@ -52,6 +30,28 @@ const FOODS = [
 const $ = (id) => document.getElementById(id);
 let storageWritable = true;
 let toastTimer;
+const api = readApiConfig();
+const catalog = { query: "", genre: "all", page: 1, totalPages: 0, results: [], loaded: false, loading: false, error: "" };
+let catalogController;
+let selectionController;
+let selectionRetry;
+let pickerMessage = "";
+let failedPosterPath = null;
+
+function readApiConfig() {
+  const base = window.MOVIE_NIGHT_CONFIG?.apiBaseUrl;
+  if (!base) return { baseUrl: "", error: "" };
+  try {
+    const url = new URL(base);
+    const local = ["localhost", "127.0.0.1"].includes(url.hostname);
+    if ((url.protocol !== "https:" && !(local && url.protocol === "http:"))
+      || url.username || url.password || url.search || url.hash) throw new TypeError("Invalid API URL");
+    return { baseUrl: url.href.replace(/\/+$/, ""), error: "" };
+  } catch (error) {
+    if (!(error instanceof TypeError)) throw error;
+    return { baseUrl: "", error: "La URL del proxy en config.js no es v\u00e1lida. Usa HTTPS (o HTTP en localhost)." };
+  }
+}
 
 function localToday() {
   const now = new Date();
@@ -61,11 +61,11 @@ function localToday() {
 function freshState() {
   return {
     version: 1,
-    movies: INITIAL_MOVIES.map((movie) => ({ ...movie, watched: false, custom: false })),
+    movies: [],
     plans: [],
     theme: "spooky",
     draft: { movieId: null, foodId: null, date: localToday(), place: "" },
-    preferences: { genre: "all", pendingOnly: true, autoFood: true, movieTab: "pending", planTab: "scheduled", view: "plans" },
+    preferences: { genre: "all", pendingOnly: true, autoFood: true, movieTab: "pending", planTab: "scheduled", view: "catalog" },
   };
 }
 
@@ -88,25 +88,47 @@ function isValidDate(value) {
 }
 
 function isGenre(value) {
-  return typeof value === "string" && Object.hasOwn(GENRES, value);
+  return typeof value === "string" && Object.hasOwn(MOVIE_GENRES, value);
+}
+
+function isStringList(value, count, length) {
+  return Array.isArray(value) && value.length <= count && value.every((item) => isText(item, length));
+}
+
+function isPosterPath(value) {
+  return value === null || (typeof value === "string" && /^\/[a-zA-Z0-9_-]+\.(jpg|png)$/i.test(value));
+}
+
+function isMovieData(movie) {
+  return isRecord(movie) && isText(movie.id, 100) && isText(movie.title, 300) && isGenre(movie.genre)
+    && (movie.year === null || (Number.isInteger(movie.year) && movie.year >= 1888 && movie.year <= 2200))
+    && (movie.minutes === null || (Number.isInteger(movie.minutes) && movie.minutes > 0 && movie.minutes <= 1000))
+    && isText(movie.description, 6000);
+}
+
+function isTmdbData(movie) {
+  return isMovieData(movie) && Number.isSafeInteger(movie.tmdbId) && movie.tmdbId > 0
+    && isPosterPath(movie.posterPath) && isStringList(movie.cast, 12, 120)
+    && isStringList(movie.directors, 6, 120) && isStringList(movie.genres, 20, 80)
+    && typeof movie.originalTitle === "string" && movie.originalTitle.length <= 300
+    && (movie.rating === null || (Number.isFinite(movie.rating) && movie.rating >= 0 && movie.rating <= 10));
 }
 
 // Validate stored data and references before rendering. Damaged data is never overwritten.
 function isValidState(value) {
-  if (!isRecord(value) || value.version !== 1 || !isGenre(value.theme)
+  if (!isRecord(value) || value.version !== 1 || !Object.hasOwn(GENRES, value.theme)
     || !Array.isArray(value.movies) || !Array.isArray(value.plans)
     || !isRecord(value.draft) || !isRecord(value.preferences)) return false;
 
-  const validMovies = value.movies.every((movie) => isRecord(movie)
-    && isText(movie.id, 100) && isText(movie.title, 120) && isGenre(movie.genre)
+  const validMovies = value.movies.every((movie) => isMovieData(movie)
     && typeof movie.watched === "boolean" && typeof movie.custom === "boolean"
-    && (movie.year === null || (Number.isInteger(movie.year) && movie.year >= 1888 && movie.year <= 2200))
-    && (movie.minutes === null || (Number.isInteger(movie.minutes) && movie.minutes > 0 && movie.minutes <= 1000))
-    && isText(movie.description, 500));
+    && (movie.tmdbId === undefined || isTmdbData(movie)));
   if (!validMovies) return false;
 
   const movieIds = new Set(value.movies.map((movie) => movie.id));
   if (movieIds.size !== value.movies.length) return false;
+  const tmdbIds = value.movies.filter((movie) => movie.tmdbId !== undefined).map((movie) => movie.tmdbId);
+  if (new Set(tmdbIds).size !== tmdbIds.length) return false;
   const foodExists = (id) => FOODS.some((food) => food.id === id);
   const validPlans = value.plans.every((plan) => isRecord(plan)
     && isText(plan.id, 100) && movieIds.has(plan.movieId) && foodExists(plan.foodId)
@@ -122,7 +144,8 @@ function isValidState(value) {
     && typeof preferences.pendingOnly === "boolean" && typeof preferences.autoFood === "boolean"
     && ["pending", "watched"].includes(preferences.movieTab)
     && ["scheduled", "completed"].includes(preferences.planTab)
-    && (preferences.view === undefined || ["plans", "movies"].includes(preferences.view));
+    && (preferences.view === undefined || ["plans", "movies", "catalog"].includes(preferences.view))
+    && (preferences.source === undefined || ["catalog", "collection"].includes(preferences.source));
 }
 
 function storageWarning(message, error) {
@@ -194,6 +217,221 @@ function candidates() {
     && (!state.preferences.pendingOnly || !movie.watched));
 }
 
+function movieSource() {
+  return state.preferences.source ?? (api.baseUrl ? "catalog" : "collection");
+}
+
+class MovieApiError extends Error {}
+
+async function apiRequest(path, params, signal) {
+  if (!api.baseUrl) throw new MovieApiError("Configura la URL del proxy para conectar el cat\u00e1logo TMDB.");
+  const url = new URL(`${api.baseUrl}${path}`);
+  Object.entries(params).forEach(([key, value]) => url.searchParams.set(key, String(value)));
+  let response;
+  try {
+    response = await fetch(url, {
+      signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(15000)]) : AbortSignal.timeout(15000),
+      credentials: "omit",
+      referrerPolicy: "no-referrer",
+      headers: { Accept: "application/json" },
+    });
+  } catch (error) {
+    if (signal?.aborted) throw error;
+    if (error.name === "TimeoutError") throw new MovieApiError("TMDB est\u00e1 tardando demasiado. Vuelve a intentarlo.");
+    if (error instanceof TypeError) throw new MovieApiError("No se pudo conectar con el cat\u00e1logo. Revisa la conexi\u00f3n y la configuraci\u00f3n del proxy.");
+    throw error;
+  }
+  let data;
+  try {
+    data = await response.json();
+  } catch (error) {
+    if (signal?.aborted) throw error;
+    if (["TimeoutError", "AbortError"].includes(error.name)) throw new MovieApiError("TMDB est\u00e1 tardando demasiado. Vuelve a intentarlo.");
+    if (error instanceof TypeError) throw new MovieApiError("Se interrumpi\u00f3 la descarga de la ficha. Vuelve a intentarlo.");
+    if (!(error instanceof SyntaxError)) throw error;
+    throw new MovieApiError("El proxy no devolvi\u00f3 datos v\u00e1lidos. Revisa su URL y vuelve a intentarlo.");
+  }
+  if (!response.ok) {
+    throw new MovieApiError(isRecord(data) && isText(data.error, 500)
+      ? data.error : `No se pudo consultar TMDB (HTTP ${response.status}). Int\u00e9ntalo de nuevo.`);
+  }
+  return data;
+}
+
+async function fetchCatalogPage(query, genre, page, signal) {
+  const data = await apiRequest("/movies", { query, genre, page }, signal);
+  if (!isRecord(data) || data.page !== page || !Number.isInteger(data.totalPages)
+    || data.totalPages < 0 || data.totalPages > 500 || !Number.isInteger(data.totalResults) || data.totalResults < 0
+    || !Array.isArray(data.results) || data.results.length > 20
+    || !data.results.every((movie) => isTmdbData(movie) && movie.id === `tmdb-${movie.tmdbId}`)) {
+    throw new MovieApiError("El cat\u00e1logo devolvi\u00f3 un formato no compatible.");
+  }
+  return data;
+}
+
+async function fetchMovieDetails(tmdbId, signal) {
+  const data = await apiRequest(`/movies/${tmdbId}`, {}, signal);
+  if (!isRecord(data) || !isTmdbData(data.movie) || data.movie.tmdbId !== tmdbId
+    || data.movie.id !== `tmdb-${tmdbId}`) throw new MovieApiError("No se pudo leer la ficha de esta pel\u00edcula.");
+  return data.movie;
+}
+
+function apiErrorMessage(error) {
+  if (error instanceof MovieApiError) return error.message;
+  console.error("Movie Night: catalog", error);
+  return "No se pudo cargar la pel\u00edcula. Int\u00e9ntalo de nuevo.";
+}
+
+async function loadCatalog(page = 1) {
+  catalogController?.abort();
+  const controller = new AbortController();
+  catalogController = controller;
+  Object.assign(catalog, { page, loading: true, loaded: true, error: "", results: [], totalPages: 0 });
+  renderCatalog();
+  try {
+    const data = await fetchCatalogPage(catalog.query, catalog.genre, page, controller.signal);
+    if (controller.signal.aborted) return;
+    Object.assign(catalog, data);
+  } catch (error) {
+    if (controller.signal.aborted) return;
+    catalog.error = apiErrorMessage(error);
+  } finally {
+    if (catalogController === controller) {
+      catalog.loading = false;
+      renderCatalog();
+    }
+  }
+}
+
+function renderCatalog() {
+  const configured = Boolean(api.baseUrl);
+  $("catalog-search").disabled = !configured;
+  $("catalog-list").setAttribute("aria-busy", String(catalog.loading));
+  $("catalog-status").textContent = !configured ? (api.error || "Conecta el proxy TMDB para explorar pel\u00edculas. Consulta el aviso de configuraci\u00f3n.")
+    : catalog.loading ? "Buscando pel\u00edculas en TMDB\u2026"
+    : catalog.error || (catalog.results.length ? `${catalog.totalResults.toLocaleString("es")} resultados en TMDB.`
+      : catalog.loaded ? "No encontramos pel\u00edculas. Prueba otro t\u00edtulo o universo." : "Busca un t\u00edtulo o descubre pel\u00edculas populares.");
+  $("catalog-retry").hidden = !catalog.error || catalog.loading || !configured;
+  const fragment = document.createDocumentFragment();
+  catalog.results.forEach((movie) => {
+    const row = $("catalog-row-template").content.firstElementChild.cloneNode(true);
+    row.querySelector(".catalog-title").textContent = movie.title;
+    row.querySelector(".catalog-meta").textContent = [movie.year ?? "A\u00f1o no disponible", MOVIE_GENRES[movie.genre]].join(" \u00b7 ");
+    row.querySelector(".catalog-description").textContent = movie.description;
+    const poster = row.querySelector(".catalog-poster");
+    if (movie.posterPath) {
+      poster.src = `https://image.tmdb.org/t/p/w185${movie.posterPath}`;
+      poster.hidden = false;
+      poster.addEventListener("error", () => { poster.hidden = true; }, { once: true });
+    }
+    const choose = row.querySelector(".choose-catalog-movie");
+    const existing = savedApiMovie(movie);
+    choose.dataset.tmdbId = movie.tmdbId;
+    choose.textContent = existing ? "Elegir de mi colecci\u00f3n" : "Elegir y guardar";
+    choose.setAttribute("aria-label", `Elegir ${movie.title}${movie.year ? ` (${movie.year})` : ""} para mi plan`);
+    fragment.append(row);
+  });
+  $("catalog-list").replaceChildren(fragment);
+  $("catalog-pagination").hidden = catalog.loading || Boolean(catalog.error) || catalog.totalPages < 2;
+  $("catalog-previous").disabled = catalog.page <= 1 || catalog.loading;
+  $("catalog-next").disabled = catalog.page >= catalog.totalPages || catalog.loading;
+  $("catalog-page").textContent = `P\u00e1gina ${catalog.page} de ${catalog.totalPages}`;
+}
+
+// Match legacy entries only when title AND release year agree; IDs keep existing plans intact.
+function savedApiMovie(movie) {
+  return state.movies.find((saved) => saved.tmdbId === movie.tmdbId)
+    ?? state.movies.find((saved) => !saved.tmdbId && movie.year !== null && saved.year === movie.year
+      && normalizedTitle(saved.title) === normalizedTitle(movie.title));
+}
+
+function saveApiMovie(movie, genre) {
+  const existing = savedApiMovie(movie);
+  if (existing) {
+    const { id, watched, genre: savedGenre } = existing;
+    Object.assign(existing, movie, { id, watched, genre: savedGenre, custom: false });
+    return existing;
+  }
+  const saved = { ...movie, genre: genre ?? movie.genre, watched: false, custom: false };
+  state.movies.push(saved);
+  return saved;
+}
+
+function cancelSelection() {
+  selectionController?.abort();
+  selectionController = null;
+  selectionRetry = null;
+  pickerMessage = "";
+}
+
+async function selectFromApi(loadMovie, retry, { genre = null, forceFood = false, focus = false } = {}) {
+  cancelSelection();
+  const controller = new AbortController();
+  selectionController = controller;
+  pickerMessage = "Cargando la ficha de la pel\u00edcula\u2026";
+  renderPicker();
+  if (focus) $("planner").scrollIntoView({ block: "start" });
+  let movie;
+  try {
+    movie = await loadMovie(controller.signal);
+    if (controller.signal.aborted) return;
+  } catch (error) {
+    if (controller.signal.aborted) return;
+    selectionController = null;
+    pickerMessage = apiErrorMessage(error);
+    selectionRetry = retry;
+    renderPicker();
+    return;
+  }
+  selectionController = null;
+  pickerMessage = "";
+  const savedMovie = saveApiMovie(movie, genre);
+  state.draft.movieId = savedMovie.id;
+  if (forceFood || state.preferences.autoFood) state.draft.foodId = pickRandom(FOODS, state.draft.foodId).id;
+  const saved = persistState();
+  renderPicker();
+  renderMovies();
+  renderPlans();
+  renderCatalog();
+  if (focus) {
+    $("planner").scrollIntoView({ block: "start" });
+    $("movie-title").focus({ preventScroll: true });
+  }
+  notify(saved ? `${savedMovie.title}: lista para tu pr\u00f3ximo plan.` : "Pel\u00edcula elegida solo para esta sesi\u00f3n.");
+}
+
+function chooseCatalogMovie(movie) {
+  const existing = savedApiMovie(movie);
+  if (existing?.tmdbId) {
+    selectMovie(existing.id);
+    return;
+  }
+  const genre = !catalog.query && catalog.genre !== "all" ? catalog.genre : null;
+  return selectFromApi((signal) => fetchMovieDetails(movie.tmdbId, signal),
+    () => chooseCatalogMovie(movie), { genre, focus: true });
+}
+
+async function randomApiMovie(signal) {
+  const { genre, pendingOnly } = state.preferences;
+  const firstPage = await fetchCatalogPage("", genre, 1, signal);
+  const remainingPages = Array.from({ length: firstPage.totalPages }, (_, index) => index + 1);
+  const previous = movieById(state.draft.movieId);
+  // Sample different pages, not just the first popular results. Bound retries for watched-heavy collections.
+  for (let attempt = 0; attempt < 5 && remainingPages.length; attempt += 1) {
+    const index = Math.floor(Math.random() * remainingPages.length);
+    const [page] = remainingPages.splice(index, 1);
+    const data = page === 1 ? firstPage : await fetchCatalogPage("", genre, page, signal);
+    const options = data.results.filter((movie) => {
+      const saved = savedApiMovie(movie);
+      return (!pendingOnly || !saved?.watched)
+        && (!previous || (movie.tmdbId !== previous.tmdbId && saved?.id !== previous.id));
+    });
+    const movie = pickRandom(options, null);
+    if (movie) return fetchMovieDetails(movie.tmdbId, signal);
+  }
+  throw new MovieApiError("No encontramos otra pel\u00edcula en las p\u00e1ginas consultadas. Reintenta, cambia de universo o desactiva Solo pendientes.");
+}
+
 // Avoid immediate repeats when at least two choices exist; a single choice remains valid.
 function pickRandom(items, previousId) {
   const pool = items.length > 1 ? items.filter((item) => item.id !== previousId) : items;
@@ -201,6 +439,12 @@ function pickRandom(items, previousId) {
 }
 
 function randomMovie(forceFood = false) {
+  if (movieSource() === "catalog") {
+    return selectFromApi(randomApiMovie, () => randomMovie(forceFood), {
+      genre: state.preferences.genre === "all" ? null : state.preferences.genre, forceFood,
+    });
+  }
+  cancelSelection();
   const movie = pickRandom(candidates(), state.draft.movieId);
   if (!movie) {
     notify("No hay pel\u00edculas con estos filtros. Cambia de universo, incluye las vistas o a\u00f1ade una nueva.");
@@ -224,6 +468,7 @@ function randomFood() {
 }
 
 function selectMovie(id) {
+  cancelSelection();
   const movie = movieById(id);
   if (!movie) {
     notify("No se encontr\u00f3 esa pel\u00edcula. Vuelve a elegir una de tu colecci\u00f3n.");
@@ -242,20 +487,53 @@ function renderPicker() {
   const movie = movieById(state.draft.movieId);
   const food = foodById(state.draft.foodId);
   const count = candidates().length;
-  $("movie-badge").textContent = movie ? GENRES[movie.genre].toLocaleUpperCase("es") : "QUE DECIDA EL DESTINO";
+  const online = movieSource() === "catalog";
+  const busy = Boolean(selectionController);
+  $("movie-badge").textContent = movie ? MOVIE_GENRES[movie.genre].toLocaleUpperCase("es") : "QUE DECIDA EL DESTINO";
   $("movie-title").textContent = movie ? movie.title : "Tu pr\u00f3xima favorita te espera.";
   $("movie-meta").textContent = movie
-    ? [movie.year, movie.minutes ? `${movie.minutes} min` : null, movie.custom ? "A\u00f1adida por ti" : null, movie.watched ? "Ya vista" : null].filter(Boolean).join(" \u00b7 ")
-    : `${state.movies.length} pel\u00edculas en tu colecci\u00f3n.`;
+    ? [movie.year ?? "A\u00f1o no disponible", movie.minutes ? `${movie.minutes} min` : "Duraci\u00f3n no disponible",
+      movie.custom ? "A\u00f1adida por ti" : null, movie.tmdbId && movie.rating !== null ? `TMDB ${movie.rating.toFixed(1)}/10` : null,
+      movie.watched ? "Ya vista" : null].filter(Boolean).join(" \u00b7 ")
+    : online ? "Un cat\u00e1logo entero por descubrir." : `${state.movies.length} pel\u00edculas en tu colecci\u00f3n.`;
   $("movie-description").textContent = movie ? movie.description : "Pulsa el bot\u00f3n y descubre qu\u00e9 ver esta noche.";
-  $("candidate-count").textContent = count
+  const details = movie?.tmdbId ? movie : null;
+  $("movie-credits").hidden = !details;
+  $("movie-cast").textContent = details?.cast.join(", ") || "Reparto no disponible";
+  $("movie-directors").textContent = details?.directors.join(", ") || "Direcci\u00f3n no disponible";
+  $("movie-genres").textContent = details?.genres.join(", ") || "G\u00e9neros no disponibles";
+  $("movie-original-title").textContent = details?.originalTitle || "No disponible";
+  $("movie-tmdb-link").hidden = !movie?.tmdbId;
+  if (movie?.tmdbId) $("movie-tmdb-link").href = `https://www.themoviedb.org/movie/${movie.tmdbId}`;
+  const poster = $("movie-poster");
+  const posterPath = movie?.tmdbId ? movie.posterPath : null;
+  const showPoster = Boolean(posterPath && posterPath !== failedPosterPath);
+  poster.hidden = !showPoster;
+  $("movie-art").hidden = showPoster;
+  if (showPoster) {
+    if (poster.dataset.path !== posterPath) {
+      poster.dataset.path = posterPath;
+      poster.src = `https://image.tmdb.org/t/p/w500${posterPath}`;
+    }
+    poster.alt = `P\u00f3ster de ${movie.title}`;
+  } else {
+    poster.removeAttribute("src");
+    delete poster.dataset.path;
+  }
+  $("candidate-count").textContent = online
+    ? "Sorpresas del cat\u00e1logo TMDB, no solo de tu colecci\u00f3n."
+    : count
     ? `${count} ${count === 1 ? "pel\u00edcula" : "pel\u00edculas"} en el bombo`
     : "Sin opciones. Abre Preferencias o a\u00f1ade una peli en Mi colecci\u00f3n.";
-  $("random-movie").disabled = count === 0;
+  $("random-movie").disabled = busy || (online ? !api.baseUrl : count === 0);
+  $("picker-status").hidden = !pickerMessage;
+  $("picker-status").textContent = pickerMessage;
+  $("retry-movie").hidden = !selectionRetry || busy;
   $("food-name").textContent = food ? food.name : "Comida por elegir";
   $("food-description").textContent = food ? food.description : "Porque una buena peli merece un buen bocado.";
-  $("save-plan").disabled = !movie || !food;
-  $("plan-hint").textContent = movie && food ? "Pon fecha y lugar. Lo dem\u00e1s ya est\u00e1." : "Elige una peli y una comida para empezar.";
+  $("save-plan").disabled = busy || !movie || !food;
+  $("plan-hint").textContent = busy ? "Espera a que termine de cargar la pel\u00edcula."
+    : movie && food ? "Pon fecha y lugar. Lo dem\u00e1s ya est\u00e1." : "Elige una peli y una comida para empezar.";
 }
 
 function normalizedTitle(title) {
@@ -324,7 +602,8 @@ function renderMovies() {
   movies.forEach((movie) => {
     const row = $("movie-row-template").content.firstElementChild.cloneNode(true);
     row.querySelector(".movie-row-title").textContent = movie.title;
-    row.querySelector(".movie-row-meta").textContent = `${GENRES[movie.genre]} \u00b7 ${movie.year ?? "A\u00f1adida por ti"}`;
+    row.querySelector(".movie-row-meta").textContent = [MOVIE_GENRES[movie.genre], movie.year,
+      movie.minutes ? `${movie.minutes} min` : null, movie.tmdbId ? "TMDB" : movie.custom ? "A\u00f1adida por ti" : null].filter(Boolean).join(" \u00b7 ");
     const watch = row.querySelector(".watch-toggle");
     watch.dataset.id = movie.id;
     watch.setAttribute("aria-pressed", String(movie.watched));
@@ -343,6 +622,10 @@ function renderMovies() {
 
 function savePlan(event) {
   event?.preventDefault();
+  if (selectionController) {
+    notify("Espera a que termine de cargar la pel\u00edcula antes de guardar el plan.");
+    return;
+  }
   const { movieId, foodId } = state.draft;
   if (!movieById(movieId) || !foodById(foodId)) {
     notify("Elige una pel\u00edcula y una comida antes de guardar el plan.");
@@ -478,15 +761,17 @@ function closeAddMovie() {
 function renderOrganizer() {
   // Older saved collections have no view preference; their data remains unchanged.
   const view = state.preferences.view ?? "plans";
-  const focusedPanel = document.activeElement.closest("#collection, #nights");
+  const focusedPanel = document.activeElement.closest("#collection, #nights, #catalog");
   $("collection").hidden = view !== "movies";
   $("nights").hidden = view !== "plans";
+  $("catalog").hidden = view !== "catalog";
   document.querySelectorAll("[data-view]").forEach((button) => {
     button.setAttribute("aria-pressed", String(button.dataset.view === view));
   });
   if (focusedPanel?.hidden) {
     document.querySelector(`[data-view="${view}"]`).focus({ preventScroll: true });
   }
+  if (view === "catalog" && api.baseUrl && !catalog.loaded) loadCatalog();
 }
 
 function renderAll() {
@@ -494,7 +779,11 @@ function renderAll() {
   renderPicker();
   renderMovies();
   renderPlans();
+  renderCatalog();
   renderOrganizer();
+  $("api-setup-notice").hidden = Boolean(api.baseUrl);
+  if (api.error) $("catalog-status").textContent = api.error;
+  $("movie-source").value = movieSource();
   $("movie-genre").value = state.preferences.genre;
   $("pending-only").checked = state.preferences.pendingOnly;
   $("auto-food").checked = state.preferences.autoFood;
@@ -505,12 +794,25 @@ function renderAll() {
 // Delegated list events continue working after templates are re-rendered.
 $("random-movie").addEventListener("click", () => randomMovie());
 $("random-food").addEventListener("click", randomFood);
+$("retry-movie").addEventListener("click", () => selectionRetry?.());
+$("movie-poster").addEventListener("error", () => {
+  failedPosterPath = $("movie-poster").dataset.path;
+  renderPicker();
+});
+$("movie-source").addEventListener("change", (event) => {
+  cancelSelection();
+  state.preferences.source = event.target.value;
+  persistState();
+  renderPicker();
+});
 $("movie-genre").addEventListener("change", (event) => {
+  cancelSelection();
   state.preferences.genre = event.target.value;
   persistState();
   renderPicker();
 });
 $("pending-only").addEventListener("change", (event) => {
+  cancelSelection();
   state.preferences.pendingOnly = event.target.checked;
   persistState();
   renderPicker();
@@ -518,6 +820,26 @@ $("pending-only").addEventListener("change", (event) => {
 $("auto-food").addEventListener("change", (event) => {
   state.preferences.autoFood = event.target.checked;
   persistState();
+});
+$("catalog-query").addEventListener("input", () => {
+  $("catalog-genre").disabled = Boolean($("catalog-query").value.trim());
+});
+$("catalog-form").addEventListener("submit", (event) => {
+  event.preventDefault();
+  if (!$("catalog-form").reportValidity()) return;
+  catalog.query = $("catalog-query").value.trim();
+  catalog.genre = $("catalog-genre").value;
+  loadCatalog();
+});
+$("catalog-previous").addEventListener("click", () => loadCatalog(catalog.page - 1));
+$("catalog-next").addEventListener("click", () => loadCatalog(catalog.page + 1));
+$("catalog-retry").addEventListener("click", () => loadCatalog(catalog.page));
+$("catalog-list").addEventListener("click", (event) => {
+  const button = event.target.closest(".choose-catalog-movie");
+  if (!button) return;
+  const movie = catalog.results.find((item) => item.tmdbId === Number(button.dataset.tmdbId));
+  if (movie) chooseCatalogMovie(movie);
+  else notify("Los resultados han cambiado. Vuelve a elegir una pel\u00edcula.");
 });
 $("plan-form").addEventListener("submit", savePlan);
 ["plan-date", "plan-place"].forEach((id) => {
@@ -568,12 +890,12 @@ document.querySelectorAll("[data-plan-tab]").forEach((button) => {
     persistState();
     renderPlans();
   });
-  document.querySelectorAll("[data-view]").forEach((button) => {
-    button.addEventListener("click", () => {
-      state.preferences.view = button.dataset.view;
-      persistState();
-      renderOrganizer();
-    });
+});
+document.querySelectorAll("[data-view]").forEach((button) => {
+  button.addEventListener("click", () => {
+    state.preferences.view = button.dataset.view;
+    persistState();
+    renderOrganizer();
   });
 });
 $("theme-toggle").addEventListener("click", () => {
@@ -615,6 +937,7 @@ window.addEventListener("storage", (event) => {
   if (event.key !== STORAGE_KEY && event.key !== null) return;
   const updated = event.newValue === null ? freshState() : decodeState(event.newValue);
   if (!updated) return;
+  cancelSelection();
   state = updated;
   storageWritable = true;
   $("storage-notice").hidden = true;

@@ -8,6 +8,7 @@
     <title>Movie Night &mdash; Tu pr&oacute;ximo buen plan</title>
     <link rel="icon" href="./assets/favicon.svg" type="image/svg+xml">
     <link rel="stylesheet" href="./styles.css">
+    <script src="./config.js" defer></script>
     <script src="./app.js" defer></script>
   </head>
   <body>
@@ -52,8 +53,9 @@
     </header>
 
     <main id="main" class="page-width">
-      <noscript><p class="notice">Activa JavaScript para elegir pel&iacute;culas y guardar tus planes. No necesitas una cuenta ni un servidor.</p></noscript>
+      <noscript><p class="notice">Activa JavaScript para elegir pel&iacute;culas y guardar tus planes. Tu colecci&oacute;n se guarda en este navegador.</p></noscript>
       <p id="storage-notice" class="notice" role="alert" hidden></p>
+      <p id="api-setup-notice" class="notice" hidden>El cat&aacute;logo necesita conectarse a TMDB. Configura la URL del proxy en <code>config.js</code> siguiendo el <a class="text-link" href="./README.md#connect-tmdb">README</a>. Mientras tanto puedes usar tu colecci&oacute;n y a&ntilde;adir pel&iacute;culas manualmente.</p>
 
       <header class="intro">
         <h1>Una peli. Algo rico. <em>Y ya.</em></h1>
@@ -67,6 +69,12 @@
             <details id="picker-options" class="picker-options">
               <summary>Preferencias <svg class="icon small"><use href="#icon-chevron"/></svg></summary>
               <div class="picker-filters">
+                <label for="movie-source">Elegir desde
+                  <select id="movie-source">
+                    <option value="catalog">Cat&aacute;logo TMDB</option>
+                    <option value="collection">Mi colecci&oacute;n</option>
+                  </select>
+                </label>
                 <label for="movie-genre">Universo
                   <select id="movie-genre">
                     <option value="all">Todos los universos</option>
@@ -75,6 +83,7 @@
                     <option value="sci-fi">Sci-fi</option>
                     <option value="fantasy">Fantas&iacute;a</option>
                     <option value="christmas">Navidad</option>
+                    <option value="general">Otros g&eacute;neros</option>
                   </select>
                 </label>
                 <label class="checkbox-label"><input id="pending-only" type="checkbox" checked>Solo pendientes</label>
@@ -84,7 +93,7 @@
           </div>
 
           <div class="movie-feature">
-            <div class="movie-art" aria-hidden="true">
+            <div id="movie-art" class="movie-art" aria-hidden="true">
               <svg class="mood-illustration" viewBox="0 0 280 300" xmlns="http://www.w3.org/2000/svg">
                 <circle cx="140" cy="133" r="99" fill="var(--art-halo)"/>
                 <g fill="var(--art-ink)" opacity=".7">
@@ -135,17 +144,27 @@
               </svg>
               <span id="art-caption" class="art-caption">Un poquito de magia.<br>Un poquito de misterio.</span>
             </div>
+            <img id="movie-poster" class="movie-poster" alt="" width="220" height="330" referrerpolicy="no-referrer" hidden>
             <div class="movie-details">
               <span id="movie-badge" class="eyebrow">QUE DECIDA EL DESTINO</span>
               <div aria-live="polite" aria-atomic="true">
                 <h2 id="movie-title" tabindex="-1">Tu pr&oacute;xima favorita te espera.</h2>
-                <p id="movie-meta" class="movie-meta">20 pel&iacute;culas en tu colecci&oacute;n.</p>
+                <p id="movie-meta" class="movie-meta">Un cat&aacute;logo entero por descubrir.</p>
                 <p id="movie-description" class="movie-description">Pulsa el bot&oacute;n y descubre qu&eacute; ver esta noche.</p>
+                <dl id="movie-credits" class="movie-credits" hidden>
+                  <div><dt>Reparto principal</dt><dd id="movie-cast"></dd></div>
+                  <div><dt>Direcci&oacute;n</dt><dd id="movie-directors"></dd></div>
+                  <div><dt>G&eacute;neros</dt><dd id="movie-genres"></dd></div>
+                  <div><dt>T&iacute;tulo original</dt><dd id="movie-original-title"></dd></div>
+                </dl>
               </div>
+              <a id="movie-tmdb-link" class="text-link" target="_blank" rel="noopener noreferrer" hidden>Ficha en TMDB &rarr;</a>
               <div class="movie-picker-actions">
                 <button id="random-movie" class="button button-primary" type="button"><svg class="icon"><use href="#icon-shuffle"/></svg>Elegir pel&iacute;cula aleatoria</button>
-                <p id="candidate-count" class="helper">20 pel&iacute;culas en el bombo</p>
+                <p id="candidate-count" class="helper">Descubre algo nuevo esta noche.</p>
               </div>
+              <p id="picker-status" class="helper" role="status" aria-live="polite" hidden></p>
+              <button id="retry-movie" class="button button-text" type="button" hidden>Reintentar selecci&oacute;n</button>
               <div class="food-line">
                 <svg class="icon"><use href="#icon-bowl"/></svg>
                 <div class="food-copy" aria-live="polite" aria-atomic="true">
@@ -170,14 +189,32 @@
       <!-- Una sola lista visible a la vez, sin perder la coleccion ni el historial. -->
       <div id="organizer" class="organizer">
         <div class="view-tabs" role="group" aria-label="Tus listas">
+          <button type="button" data-view="catalog" aria-pressed="false" aria-controls="catalog">Explorar</button>
           <button type="button" data-view="plans" aria-pressed="true" aria-controls="nights">Mis noches <span id="nights-total" class="count">0</span></button>
-          <button type="button" data-view="movies" aria-pressed="false" aria-controls="collection">Mi colecci&oacute;n <span id="collection-total" class="count">20</span></button>
+          <button type="button" data-view="movies" aria-pressed="false" aria-controls="collection">Mi colecci&oacute;n <span id="collection-total" class="count">0</span></button>
         </div>
+        <section id="catalog" aria-labelledby="catalog-heading" hidden>
+          <h2 id="catalog-heading" class="sr-only">Explorar el cat&aacute;logo de TMDB</h2>
+          <form id="catalog-form" class="catalog-form" role="search">
+            <label for="catalog-query">Buscar pel&iacute;culas<input id="catalog-query" type="search" maxlength="120" placeholder="T&iacute;tulo de la pel&iacute;cula" aria-describedby="catalog-help"></label>
+            <label for="catalog-genre">Universo<select id="catalog-genre"><option value="all">Todos los universos</option><option value="spooky">Spooky season</option><option value="cozy">Cozy oto&ntilde;o</option><option value="sci-fi">Sci-fi</option><option value="fantasy">Fantas&iacute;a</option><option value="christmas">Navidad</option><option value="general">Otros g&eacute;neros</option></select></label>
+            <button id="catalog-search" class="button button-primary" type="submit">Buscar</button>
+          </form>
+          <p id="catalog-help" class="helper">Sin t&iacute;tulo, descubre pel&iacute;culas populares por universo. La b&uacute;squeda por t&iacute;tulo incluye todos los universos. Elegir una peli la guarda en tu colecci&oacute;n.</p>
+          <p id="catalog-status" class="catalog-status helper" role="status" aria-live="polite"></p>
+          <button id="catalog-retry" class="button button-secondary" type="button" hidden>Reintentar</button>
+          <ul id="catalog-list" class="catalog-list" aria-label="Resultados de TMDB" aria-busy="false"></ul>
+          <nav id="catalog-pagination" class="catalog-pagination" aria-label="P&aacute;ginas del cat&aacute;logo" hidden>
+            <button id="catalog-previous" class="button button-secondary" type="button">Anterior</button>
+            <span id="catalog-page" class="helper"></span>
+            <button id="catalog-next" class="button button-secondary" type="button">Siguiente</button>
+          </nav>
+        </section>
         <section id="collection" aria-labelledby="collection-heading" hidden>
           <h2 id="collection-heading" class="sr-only">Mi colecci&oacute;n</h2>
           <div class="list-toolbar">
             <div class="tab-bar" role="group" aria-label="Filtrar pel&iacute;culas">
-              <button class="tab-button" type="button" data-movie-tab="pending" aria-pressed="true">Pendientes <span id="pending-count" class="count">20</span></button>
+              <button class="tab-button" type="button" data-movie-tab="pending" aria-pressed="true">Pendientes <span id="pending-count" class="count">0</span></button>
               <button class="tab-button" type="button" data-movie-tab="watched" aria-pressed="false">Ya vistas <span id="watched-count" class="count">0</span></button>
             </div>
             <button id="show-add-movie" class="button button-text" type="button" aria-expanded="false" aria-controls="add-movie-form"><svg class="icon small"><use href="#icon-plus"/></svg>A&ntilde;adir peli</button>
@@ -186,7 +223,7 @@
             <div class="add-form-heading"><h3>Una m&aacute;s para la lista</h3><button id="cancel-add-movie" class="icon-button" type="button" aria-label="Cerrar formulario"><svg class="icon small"><use href="#icon-close"/></svg></button></div>
             <label for="new-movie-title">T&iacute;tulo de la pel&iacute;cula<input id="new-movie-title" name="title" type="text" maxlength="120" placeholder="Esa que siempre has querido ver..." required></label>
             <div class="add-form-bottom">
-              <label for="new-movie-genre">Universo<select id="new-movie-genre" name="genre"><option value="spooky">Spooky season</option><option value="cozy">Cozy oto&ntilde;o</option><option value="sci-fi">Sci-fi</option><option value="fantasy">Fantas&iacute;a</option><option value="christmas">Navidad</option></select></label>
+              <label for="new-movie-genre">Universo<select id="new-movie-genre" name="genre"><option value="spooky">Spooky season</option><option value="cozy">Cozy oto&ntilde;o</option><option value="sci-fi">Sci-fi</option><option value="fantasy">Fantas&iacute;a</option><option value="christmas">Navidad</option><option value="general">Otros g&eacute;neros</option></select></label>
               <button class="button button-dark" type="submit">A&ntilde;adir a pendientes</button>
             </div>
           </form>
@@ -214,10 +251,22 @@
         </section>
       </div>
 
-      <footer class="site-footer"><svg class="icon small"><use href="#icon-moon"/></svg>Sin cuentas. Tus datos se guardan en este navegador.</footer>
+      <footer class="site-footer">
+        <p>Sin cuentas. Tu colecci&oacute;n y tus planes se guardan en este navegador.</p>
+        <div class="tmdb-attribution" aria-label="Cr&eacute;ditos">
+          <a href="https://www.themoviedb.org" target="_blank" rel="noopener noreferrer"><img src="https://www.themoviedb.org/assets/v4/logos/v2/blue_long_2-9665a76b1ae401a510ec1e0ca40ddcb3b0cfe45f1d51b77a308fea0845885648.svg" alt="TMDB" width="100" height="13" loading="lazy" referrerpolicy="no-referrer"></a>
+          <p lang="en">This product uses the TMDB API but is not endorsed or certified by TMDB.</p>
+        </div>
+      </footer>
     </main>
 
     <!-- Las plantillas se clonan y rellenan con textContent, incluso para titulos personalizados. -->
+    <template id="catalog-row-template">
+      <li class="catalog-card">
+        <div class="catalog-poster-wrap"><span class="helper">Sin p&oacute;ster</span><img class="catalog-poster" alt="" width="92" height="138" loading="lazy" referrerpolicy="no-referrer" hidden></div>
+        <div class="catalog-card-copy"><h3 class="catalog-title"></h3><p class="catalog-meta helper"></p><p class="catalog-description"></p><button class="button button-text choose-catalog-movie" type="button"></button></div>
+      </li>
+    </template>
     <template id="movie-row-template">
       <li class="movie-row">
         <button class="watch-toggle" type="button"><svg class="icon small"><use href="#icon-check"/></svg></button>

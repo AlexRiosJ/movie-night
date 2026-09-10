@@ -89,14 +89,14 @@ test("mood filters use TMDB genres/keywords including the general category", asy
   assert.equal(actual[4].searchParams.get("without_genres"), "27,9648,35,10749,10751,878,14");
 });
 
-test("details include cast, directors, genres, original title, rating and synopsis", async (t) => {
+test("details include cast photos, directors, genres, original title, rating, votes and synopsis", async (t) => {
   t.mock.method(globalThis, "fetch", async (url) => {
     assert.equal(url.pathname, "/3/movie/42");
     assert.equal(url.searchParams.get("append_to_response"), "credits,keywords,images");
     assert.equal(url.searchParams.get("language"), "es-MX");
     assert.equal(url.searchParams.get("include_image_language"), "es,null");
     return json(upstreamMovie({
-      credits: { cast: [{ name: "Actor" }], crew: [{ job: "Writer", name: "Writer" }, { job: "Director", name: "Director" }] },
+      credits: { cast: [{ name: "Actor", profile_path: "/actor.jpg" }], crew: [{ job: "Writer", name: "Writer" }, { job: "Director", name: "Director" }] },
       genres: [{ id: 878, name: "Ciencia ficci\u00f3n" }],
       keywords: { keywords: [{ id: 207317, name: "christmas" }] },
     }));
@@ -105,11 +105,13 @@ test("details include cast, directors, genres, original title, rating and synops
   const { movie } = await response.json();
   assert.equal(response.status, 200);
   assert.deepEqual(movie.cast, ["Actor"]);
+  assert.deepEqual(movie.castProfiles, [{ name: "Actor", profilePath: "/actor.jpg" }]);
   assert.deepEqual(movie.directors, ["Director"]);
   assert.deepEqual(movie.genres, ["Ciencia ficci\u00f3n"]);
   assert.equal(movie.genre, "christmas");
   assert.equal(movie.originalTitle, "Original");
   assert.equal(movie.rating, 8.4);
+  assert.equal(movie.voteCount, 100);
   assert.equal(movie.minutes, 123);
   assert.equal(movie.language, "es-MX");
 });
@@ -288,14 +290,50 @@ test("normalization bounds optional fields and missing metadata", () => {
   assert.equal(result.title.length, 300);
   assert.equal(result.description.length, 6000);
   assert.equal(result.cast.length, 12);
+  assert.equal(result.castProfiles.length, 12);
+  assert.deepEqual(result.castProfiles[0], { name: "Actor 0", profilePath: null });
   assert.equal(result.year, null);
   assert.equal(result.minutes, null);
   assert.equal(result.posterPath, null);
   assert.equal(result.rating, null);
+  assert.equal(result.voteCount, 0);
   assert.equal(normalizeMovie({ id: 42, title: "Movie" }).description, "Sin sinopsis disponible.");
   for (const data of [null, {}, { id: -1, title: "No" }, upstreamMovie({ credits: "bad" }), upstreamMovie({ genres: ["bad"] })]) {
     assert.throws(() => normalizeMovie(data));
   }
+});
+
+test("cast profiles preserve principal cast order, deduplicate names, and sanitize image paths", () => {
+  const result = normalizeMovie(upstreamMovie({ credits: { cast: [
+    { name: " First ", profile_path: "/first.jpg" },
+    { name: "Second", profile_path: null },
+    { name: "First", profile_path: "/duplicate.jpg" },
+    { name: "Third", profile_path: "https://evil.example/image.jpg" },
+    { name: "Fourth", profile_path: "//evil.example/image.png" },
+    { name: "", profile_path: "/unnamed.jpg" },
+    { name: "Fifth", profile_path: "/fifth.PNG" },
+  ] } }));
+  assert.deepEqual(result.castProfiles, [
+    { name: "First", profilePath: "/first.jpg" },
+    { name: "Second", profilePath: null },
+    { name: "Third", profilePath: null },
+    { name: "Fourth", profilePath: null },
+    { name: "Fifth", profilePath: "/fifth.PNG" },
+  ]);
+  assert.deepEqual(result.castProfiles.map((person) => person.name), result.cast);
+  assert.deepEqual(normalizeMovie({ id: 42, title: "Movie" }).castProfiles, []);
+  assert.throws(() => normalizeMovie(upstreamMovie({ credits: { cast: [null] } })));
+});
+
+test("user ratings require a valid vote count and retain genuine zero scores", () => {
+  for (const vote_count of [undefined, null, "100", -1, 1.5, Number.MAX_SAFE_INTEGER + 1]) {
+    const result = normalizeMovie(upstreamMovie({ vote_count }));
+    assert.equal(result.voteCount, null);
+    assert.equal(result.rating, null);
+  }
+  const result = normalizeMovie(upstreamMovie({ vote_average: 0, vote_count: 1 }));
+  assert.equal(result.voteCount, 1);
+  assert.equal(result.rating, 0);
 });
 
 test("invalid inputs, routes and HTTP methods never hit TMDB", async (t) => {

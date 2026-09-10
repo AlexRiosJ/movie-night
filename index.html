@@ -7,10 +7,11 @@
     <meta name="description" content="Una peli, algo rico y un buen plan. Organiza tus movie nights y guarda tu colección, sin cuentas ni complicaciones." data-en-content="A movie, good food, and a great plan. Organize your movie nights and save your collection, without an account.">
     <title data-en="Movie Night — Your next great plan">Movie Night &mdash; Tu pr&oacute;ximo buen plan</title>
     <link rel="icon" href="./assets/favicon.svg" type="image/svg+xml">
-    <link rel="stylesheet" href="./styles.css">
-    <script src="./config.js" defer></script>
-    <script src="./i18n.js" defer></script>
-    <script src="./app.js" defer></script>
+    <link rel="stylesheet" href="./styles.css?v=languages-1">
+    <script src="./config.js?v=languages-1" defer></script>
+    <script src="./i18n.js?v=languages-1" defer></script>
+    <script src="./parties.js?v=languages-1" defer></script>
+    <script src="./app.js?v=languages-1" defer></script>
   </head>
   <body>
     <a class="skip-link" href="#main" data-en="Skip to content">Saltar al contenido</a>
@@ -74,8 +75,39 @@
         <p data-en="Less deciding, more enjoying the night.">Menos decidir, m&aacute;s disfrutar de la noche.</p>
       </header>
 
+      <section class="party-panel" aria-labelledby="party-title">
+        <div class="party-heading">
+          <div><h2 id="party-title">Tu espacio de movie nights</h2><p id="party-identity" class="helper"></p></div>
+          <button id="party-leave" class="button button-secondary" type="button" hidden data-en="Back to my personal list">Volver a mi lista personal</button>
+        </div>
+        <p id="party-members" class="helper"></p>
+        <p id="party-status" class="helper" role="status" aria-live="polite"></p>
+        <p id="party-storage-notice" class="notice" role="alert" hidden></p>
+        <button id="party-refresh" class="button button-text" type="button" hidden data-en="Refresh now / Retry">Actualizar ahora / Reintentar</button>
+        <div id="party-invite" class="party-invite" hidden>
+          <label for="party-link"><span data-en="Invitation link">Enlace de invitaci&oacute;n</span><input id="party-link" type="text" readonly></label>
+          <button id="party-copy" class="button button-secondary" type="button" data-en="Copy link">Copiar enlace</button>
+          <p class="helper" data-en="Anyone with this link can join and see the list and plan locations. Share it only with your group.">Cualquiera con este enlace puede unirse, ver la lista y los lugares de los planes. Comp&aacute;rtelo solo con tu grupo.</p>
+        </div>
+        <details id="party-options">
+          <summary data-en="Create or join a party">Crear o unirme a una party</summary>
+          <form id="party-form" class="party-form">
+            <p id="party-form-help" class="helper"></p>
+            <label id="party-name-field" for="party-name"><span data-en="Party name">Nombre de la party</span><input id="party-name" type="text" maxlength="80" placeholder="Viernes de pelis" data-en-placeholder="Friday movie night" required></label>
+            <label for="party-display-name"><span data-en="Your name">Tu nombre</span><input id="party-display-name" type="text" maxlength="40" autocomplete="nickname" placeholder="C&oacute;mo te llamamos" data-en-placeholder="What should we call you?" required></label>
+            <button id="party-create" class="button button-primary" type="submit">Crear party</button>
+            <p class="helper" data-en="No accounts. We remember your identity in this browser; changing devices or clearing its data creates a new identity. To join another group, open its invitation link.">Sin cuentas. Recordaremos tu identidad en este navegador; cambiar de dispositivo o borrar sus datos crea una identidad nueva. Para unirte a otro grupo, abre su enlace de invitaci&oacute;n.</p>
+          </form>
+          <div id="party-resume" class="party-invite" hidden>
+            <label for="party-sessions"><span data-en="Return to another party">Volver a otra party</span><select id="party-sessions"></select></label>
+            <button id="party-resume-button" class="button button-secondary" type="button" data-en="Open party">Abrir party</button>
+          </div>
+        </details>
+      </section>
+
       <!-- El generador y el formulario comparten una seleccion, guardada como borrador. -->
       <section id="planner" class="planner" aria-label="Crea tu movie night" data-en-aria-label="Create your movie night">
+        <div class="picker-controls">
           <div class="planner-toolbar">
             <span class="eyebrow" data-en="TONIGHT'S PLAN">EL PLAN DE HOY</span>
             <details id="picker-options" class="picker-options">
@@ -84,7 +116,7 @@
                 <label for="movie-source"><span data-en="Choose from">Elegir desde</span>
                   <select id="movie-source">
                     <option value="catalog" data-en="TMDB catalog">Cat&aacute;logo TMDB</option>
-                    <option value="collection" data-en="My collection">Mi colecci&oacute;n</option>
+                    <option id="collection-source-label" value="collection">Mi colecci&oacute;n</option>
                   </select>
                 </label>
                 <label for="movie-genre"><span data-en="Universe">Universo</span>
@@ -103,6 +135,13 @@
               </div>
             </details>
           </div>
+          <div class="movie-picker-actions">
+            <button id="random-movie" class="button button-primary" type="button" aria-describedby="candidate-count" aria-busy="false"><span id="random-movie-icon" class="random-movie-icon" aria-hidden="true"><svg class="icon"><use href="#icon-shuffle"/></svg></span><span id="random-movie-spinner" class="button-spinner" aria-hidden="true" hidden></span><span data-en="Choose a random movie">Elegir pel&iacute;cula aleatoria</span></button>
+            <p id="candidate-count" class="helper">Descubre algo nuevo esta noche.</p>
+          </div>
+          <p id="picker-status" class="helper" role="status" aria-live="polite" hidden></p>
+          <button id="retry-movie" class="button button-text" type="button" hidden data-en="Retry selection">Reintentar selecci&oacute;n</button>
+        </div>
 
           <div class="movie-feature">
             <div id="movie-art" class="movie-art" aria-hidden="true">
@@ -162,21 +201,19 @@
               <div aria-live="polite" aria-atomic="true">
                 <h2 id="movie-title" tabindex="-1">Tu pr&oacute;xima favorita te espera.</h2>
                 <p id="movie-meta" class="movie-meta">Un cat&aacute;logo entero por descubrir.</p>
+                <div id="movie-score" class="movie-score" hidden>
+                  <span id="movie-score-value" class="movie-score-value"></span>
+                  <div><p class="movie-score-label" data-en="User score">Puntuaci&oacute;n de usuarios</p><p id="movie-score-votes" class="helper"></p></div>
+                </div>
                 <p id="movie-description" class="movie-description">Pulsa el bot&oacute;n y descubre qu&eacute; ver esta noche.</p>
                 <dl id="movie-credits" class="movie-credits" hidden>
-                  <div><dt data-en="Main cast">Reparto principal</dt><dd id="movie-cast"></dd></div>
+                  <div><dt data-en="Main cast">Reparto principal</dt><dd><ul id="movie-cast" class="cast-list" tabindex="0" aria-label="Reparto principal" data-en-aria-label="Main cast"></ul><p id="movie-cast-empty" hidden data-en="Cast unavailable">Reparto no disponible</p></dd></div>
                   <div><dt data-en="Directors">Direcci&oacute;n</dt><dd id="movie-directors"></dd></div>
                   <div><dt data-en="Genres">G&eacute;neros</dt><dd id="movie-genres"></dd></div>
                   <div><dt data-en="Original title">T&iacute;tulo original</dt><dd id="movie-original-title"></dd></div>
                 </dl>
               </div>
               <a id="movie-tmdb-link" class="text-link" target="_blank" rel="noopener noreferrer" hidden data-en="View on TMDB →">Ficha en TMDB &rarr;</a>
-              <div class="movie-picker-actions">
-                <button id="random-movie" class="button button-primary" type="button"><svg class="icon"><use href="#icon-shuffle"/></svg><span data-en="Choose a random movie">Elegir pel&iacute;cula aleatoria</span></button>
-                <p id="candidate-count" class="helper">Descubre algo nuevo esta noche.</p>
-              </div>
-              <p id="picker-status" class="helper" role="status" aria-live="polite" hidden></p>
-              <button id="retry-movie" class="button button-text" type="button" hidden data-en="Retry selection">Reintentar selecci&oacute;n</button>
               <div class="food-line">
                 <svg class="icon"><use href="#icon-bowl"/></svg>
                 <div class="food-copy" aria-live="polite" aria-atomic="true">
@@ -202,8 +239,8 @@
       <div id="organizer" class="organizer">
         <div class="view-tabs" role="group" aria-label="Tus listas" data-en-aria-label="Your lists">
           <button type="button" data-view="catalog" aria-pressed="false" aria-controls="catalog" data-en="Explore">Explorar</button>
-          <button type="button" data-view="plans" aria-pressed="true" aria-controls="nights"><span data-en="My nights">Mis noches</span> <span id="nights-total" class="count">0</span></button>
-          <button type="button" data-view="movies" aria-pressed="false" aria-controls="collection"><span data-en="My collection">Mi colecci&oacute;n</span> <span id="collection-total" class="count">0</span></button>
+          <button type="button" data-view="plans" aria-pressed="true" aria-controls="nights"><span id="nights-label">Mis noches</span> <span id="nights-total" class="count">0</span></button>
+          <button type="button" data-view="movies" aria-pressed="false" aria-controls="collection"><span id="collection-label">Mi colecci&oacute;n</span> <span id="collection-total" class="count">0</span></button>
         </div>
         <section id="catalog" aria-labelledby="catalog-heading" hidden>
           <h2 id="catalog-heading" class="sr-only" data-en="Explore the TMDB catalog">Explorar el cat&aacute;logo de TMDB</h2>
@@ -236,7 +273,7 @@
             <label for="new-movie-title"><span data-en="Movie title">T&iacute;tulo de la pel&iacute;cula</span><input id="new-movie-title" name="title" type="text" maxlength="120" placeholder="Esa que siempre has querido ver..." data-en-placeholder="The one you've always wanted to watch..." required></label>
             <div class="add-form-bottom">
               <label for="new-movie-genre"><span data-en="Universe">Universo</span><select id="new-movie-genre" name="genre"><option value="spooky">Spooky season</option><option value="cozy" data-en="Cozy autumn">Cozy oto&ntilde;o</option><option value="sci-fi">Sci-fi</option><option value="fantasy" data-en="Fantasy">Fantas&iacute;a</option><option value="christmas" data-en="Christmas">Navidad</option><option value="general" data-en="Other genres">Otros g&eacute;neros</option></select></label>
-              <button class="button button-dark" type="submit" data-en="Add to unwatched">A&ntilde;adir a pendientes</button>
+              <button id="add-movie-submit" class="button button-dark" type="submit" data-en="Add to unwatched">A&ntilde;adir a pendientes</button>
             </div>
           </form>
           <ul id="movie-list" class="movie-list" aria-label="Pel&iacute;culas pendientes"></ul>
@@ -264,7 +301,7 @@
       </div>
 
       <footer class="site-footer">
-        <p data-en="No accounts. Your collection and plans are saved in this browser.">Sin cuentas. Tu colecci&oacute;n y tus planes se guardan en este navegador.</p>
+        <p data-en="No accounts. In personal mode, your data is saved in this browser. In a party, the list and plans are shared with the group.">Sin cuentas. En modo personal, tus datos se guardan en este navegador. En una party, la lista y los planes se comparten con el grupo.</p>
         <div class="tmdb-attribution" aria-label="Cr&eacute;ditos" data-en-aria-label="Credits">
           <a href="https://www.themoviedb.org" target="_blank" rel="noopener noreferrer"><img src="https://www.themoviedb.org/assets/v4/logos/v2/blue_long_2-9665a76b1ae401a510ec1e0ca40ddcb3b0cfe45f1d51b77a308fea0845885648.svg" alt="TMDB" width="100" height="13" loading="lazy" referrerpolicy="no-referrer"></a>
           <p lang="en">This product uses the TMDB API but is not endorsed or certified by TMDB.</p>
@@ -273,6 +310,12 @@
     </main>
 
     <!-- Las plantillas se clonan y rellenan con textContent, incluso para titulos personalizados. -->
+    <template id="cast-member-template">
+      <li class="cast-member">
+        <div class="cast-photo-wrap"><span class="cast-placeholder" data-en="No photo">Sin foto</span><img class="cast-photo" alt="" width="84" height="126" loading="lazy" referrerpolicy="no-referrer" hidden></div>
+        <p class="cast-name"></p>
+      </li>
+    </template>
     <template id="catalog-row-template">
       <li class="catalog-card">
         <div class="catalog-poster-wrap"><span class="helper" data-en="No poster">Sin p&oacute;ster</span><img class="catalog-poster" alt="" width="92" height="138" loading="lazy" referrerpolicy="no-referrer" hidden></div>
@@ -291,6 +334,7 @@
         <span class="plan-date-badge"><svg class="icon small"><use href="#icon-calendar"/></svg><time></time></span>
         <div class="plan-row-copy">
           <h3 class="plan-movie-title"></h3>
+          <p class="plan-author helper"></p>
           <div class="plan-metadata">
             <p class="plan-detail"><svg class="icon small"><use href="#icon-bowl"/></svg><span class="plan-food"></span></p>
             <p class="plan-detail"><svg class="icon small"><use href="#icon-pin"/></svg><span class="plan-location"></span></p>

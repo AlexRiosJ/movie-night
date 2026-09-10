@@ -1,3 +1,5 @@
+import { handlePartyRequest } from "./parties.mjs";
+
 const TMDB_BASE = "https://api.themoviedb.org/3";
 const DEFAULT_LANGUAGE = "es-MX";
 const CACHE_VERSION = "v2";
@@ -141,6 +143,7 @@ export function normalizeMovie(data, mood = null, language = DEFAULT_LANGUAGE) {
   if (!genreIds.every(positiveId)) throw invalidUpstream();
   const credits = optionalRecord(data.credits);
   const cast = optionalArray(credits.cast);
+  const principalCast = names(cast, 12, 120);
   const crew = optionalArray(credits.crew);
   if (crew.some((person) => !isRecord(person))) throw invalidUpstream();
   const keywords = optionalArray(optionalRecord(data.keywords).keywords);
@@ -150,6 +153,7 @@ export function normalizeMovie(data, mood = null, language = DEFAULT_LANGUAGE) {
   const genreNames = genres.length
     ? genres.map((genre) => text(genre.name, 80) || GENRE_NAMES[language][genre.id])
     : genreIds.map((id) => GENRE_NAMES[language][id]);
+  const voteCount = Number.isSafeInteger(data.vote_count) && data.vote_count >= 0 ? data.vote_count : null;
   return {
     id: `tmdb-${data.id}`,
     tmdbId: data.id,
@@ -160,12 +164,17 @@ export function normalizeMovie(data, mood = null, language = DEFAULT_LANGUAGE) {
     minutes: Number.isInteger(data.runtime) && data.runtime > 0 && data.runtime <= 1000 ? data.runtime : null,
     description: text(data.overview, 6000) || MESSAGES[language].missingSynopsis,
     posterPath: safePosterPath(data.poster_path),
-    cast: names(cast, 12, 120),
+    cast: principalCast,
+    castProfiles: principalCast.map((name) => ({
+      name,
+      profilePath: safePosterPath(cast.find((person) => text(person.name, 120) === name).profile_path),
+    })),
     directors: names(crew.filter((person) => person.job === "Director"), 6, 120),
     genres: [...new Set(genreNames.filter(Boolean))].slice(0, 20),
     originalTitle: text(data.original_title, 300),
+    voteCount,
     rating: Number.isFinite(data.vote_average) && data.vote_average >= 0 && data.vote_average <= 10
-      && data.vote_count > 0 ? data.vote_average : null,
+      && voteCount > 0 ? data.vote_average : null,
   };
 }
 
@@ -297,6 +306,9 @@ export default {
     if (origin && !allowedOrigin) return withCors(jsonResponse({ error: MESSAGES[language].forbiddenOrigin }, 403), null);
     try {
       if (!allowed.length) throw new HttpError(503, "missingOrigins");
+      if (url.pathname === "/parties" || url.pathname.startsWith("/parties/")) {
+        return withCors(await handlePartyRequest(request, env), allowedOrigin);
+      }
       const route = parseRoute(url);
       if (request.method === "OPTIONS") {
         const requestedMethod = request.headers.get("Access-Control-Request-Method");

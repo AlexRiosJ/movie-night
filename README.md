@@ -294,8 +294,18 @@ documentation changes.
   food, date, and location to save a plan. Dates are local, not UTC.
 - Completing a plan marks its movie watched. Reopening or deleting a plan does
   not erase viewing history. Deleting a plan asks for confirmation.
+- The compact **Movie party** button in the header shows personal mode or the
+  active party's name. Open it to create a party, join by pasting an invitation
+  link, copy your party's link, see participants, reopen a remembered party, or
+  return to your personal list. Controls live in a modal, not in the planner.
+  The button and modal follow the selected Movie, Arcade, or Zine style and its
+  light or dark mode, alongside the separate appearance controls.
+  Invitation links open the join form automatically; remembered memberships
+  are reused. The modal closes with its close button, Escape, or a backdrop click.
+  Connection and storage warnings remain visible even when the modal is closed.
 - Create a **party** with a party name and display name, then share its invitation.
-  Joining requires a display name, not an account. While a party is active,
+  Joining requires a display name, not an account. Creating keeps the invitation
+  controls open for sharing; joining returns you to the planner. While a party is active,
   additions, watched status, plans, and their authors are shared. All members may
   add and toggle entries; only a plan's creator or the host can delete it directly.
 - **Coleccion del grupo** shows a trash button for movies you added; the host

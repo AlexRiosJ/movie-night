@@ -42,6 +42,7 @@ class Element {
     this.textContent = "";
     this.hidden = false;
     this.disabled = false;
+    this.open = false;
   }
   querySelector(selector) {
     if (!this.nodes.has(selector)) this.nodes.set(selector, new Element());
@@ -57,7 +58,10 @@ class Element {
   cloneNode() { return new Element(); }
   closest() { return null; }
   contains() { return false; }
-  focus() {}
+  focus() { if (this.ownerDocument) this.ownerDocument.activeElement = this; }
+  showModal() { this.open = true; }
+  close() { this.open = false; this.listeners.close?.(); }
+  getBoundingClientRect() { return { left: 10, top: 10, right: 490, bottom: 590 }; }
   scrollIntoView() {}
   select() {}
   reportValidity() { return true; }
@@ -83,6 +87,7 @@ function app({
     return input;
   });
   document.querySelectorAll = (selector) => selector === 'input[name="theme"]' ? themes : [];
+  nodes.forEach((node) => { node.ownerDocument = document; });
   document.getElementById = (id) => {
     assert.ok(nodes.has(id), `Element #${id} must exist in index.html`);
     return nodes.get(id);
@@ -814,6 +819,167 @@ test("legacy party views and shared categories migrate before rendering", () => 
   }
 });
 
+test("party controls stay in a modal and the header describes personal mode", () => {
+  const ui = app();
+  assert.equal(ui.nodes.get("party-dialog").open, false);
+  assert.equal(ui.nodes.get("party-trigger-name").textContent, "Modo personal");
+  assert.equal(ui.nodes.get("party-trigger").dataset.active, "false");
+  assert.equal(ui.nodes.get("party-notice").hidden, true);
+  assert.equal(ui.nodes.get("party-setup-notice").hidden, false);
+  assert.equal(ui.nodes.get("party-create").disabled, true);
+  assert.equal(ui.nodes.get("party-options-summary").hidden, true);
+  assert.match(html, /<dialog id="party-dialog"[^>]+aria-labelledby="party-title"/);
+  assert.equal(html.includes('class="party-panel"'), false);
+  assert.ok(html.indexOf('id="party-form"') > html.indexOf("</main>"));
+  ui.nodes.get("party-trigger").listeners.click();
+  assert.equal(ui.nodes.get("party-dialog").open, true);
+  assert.equal(ui.nodes.get("party-trigger").attributes["aria-expanded"], "true");
+  ui.nodes.get("party-close").listeners.click();
+  assert.equal(ui.nodes.get("party-dialog").open, false);
+  assert.equal(ui.nodes.get("party-trigger").attributes["aria-expanded"], "false");
+  assert.equal(ui.run("document.activeElement === $('party-trigger')"), true);
+});
+
+test("backdrop dismisses the modal without treating its content or padding as backdrop", () => {
+  const ui = app();
+  const dialog = ui.nodes.get("party-dialog");
+  ui.run("openPartyDialog()");
+  dialog.listeners.click({ target: ui.nodes.get("party-form"), clientX: 0, clientY: 0 });
+  assert.equal(dialog.open, true);
+  dialog.listeners.click({ target: dialog, clientX: 50, clientY: 50 });
+  assert.equal(dialog.open, true);
+  dialog.listeners.click({ target: dialog, clientX: 0, clientY: 0 });
+  assert.equal(dialog.open, false);
+});
+
+test("switching create/join modes disables hidden required fields and preserves drafts", () => {
+  const ui = app();
+  ui.nodes.get("party-name").value = "Friday movies";
+  ui.nodes.get("party-mode-join").listeners.click();
+  assert.equal(ui.nodes.get("party-name-field").hidden, true);
+  assert.equal(ui.nodes.get("party-name").disabled, true);
+  assert.equal(ui.nodes.get("party-name").required, false);
+  assert.equal(ui.nodes.get("party-join-field").hidden, false);
+  assert.equal(ui.nodes.get("party-join-link").disabled, false);
+  assert.equal(ui.nodes.get("party-join-link").required, true);
+  assert.equal(ui.nodes.get("party-mode-join").attributes["aria-pressed"], "true");
+  ui.nodes.get("party-mode-create").listeners.click();
+  assert.equal(ui.nodes.get("party-name").value, "Friday movies");
+  assert.equal(ui.nodes.get("party-name").disabled, false);
+  assert.equal(ui.nodes.get("party-name").required, true);
+  assert.equal(ui.nodes.get("party-join-link").disabled, true);
+  assert.equal(ui.nodes.get("party-join-link").required, false);
+});
+
+test("pasted invitations join through the configured API and close the modal", async () => {
+  const calls = [];
+  const ui = app({ fetch: async (url, options) => {
+    calls.push({ url, options });
+    return json({ session: sharedSession(), snapshot: snapshot() });
+  } });
+  ui.run("api.baseUrl = 'https://api.example.com'; catalog.loaded = true; openPartyDialog(); setPartyMode('join')");
+  ui.nodes.get("party-join-link").value = `https://alexriosj.github.io/movie-night/#party=${"b".repeat(64)}`;
+  ui.nodes.get("party-display-name").value = "Alex";
+  await ui.nodes.get("party-form").listeners.submit({ preventDefault() {} });
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].url.origin, "https://api.example.com");
+  assert.equal(calls[0].url.pathname, "/parties/join");
+  assert.deepEqual(JSON.parse(calls[0].options.body), { inviteToken: "b".repeat(64), displayName: "Alex" });
+  assert.equal(ui.nodes.get("party-dialog").open, false);
+  assert.equal(ui.nodes.get("party-trigger-name").textContent, "Friday movies");
+  assert.equal(ui.nodes.get("party-trigger").dataset.active, "true");
+  assert.match(ui.nodes.get("party-trigger").attributes["aria-label"], /Friday movies/);
+  assert.equal(ui.run("document.activeElement === $('party-trigger')"), true);
+});
+
+test("invalid pasted invitations never fall through to creating a party", async () => {
+  for (const value of ["not a link", "https://example.com/#party=broken", "https://example.com/",
+    `javascript:alert(1)#party=${"b".repeat(64)}`]) {
+    let calls = 0;
+    const ui = app({ fetch: async () => { calls += 1; } });
+    ui.run("api.baseUrl = 'https://api.example.com'; openPartyDialog(); setPartyMode('join')");
+    ui.nodes.get("party-join-link").value = value;
+    ui.nodes.get("party-display-name").value = "Alex";
+    await ui.run("submitParty({ preventDefault() {} })");
+    assert.equal(calls, 0);
+    assert.equal(ui.nodes.get("party-dialog").open, true);
+    assert.equal(ui.nodes.get("party-status").attributes.role, "alert");
+    assert.equal(ui.nodes.get("party-status").hidden, false);
+  }
+});
+
+test("pasting a remembered invitation reuses membership without creating a participant", async () => {
+  const calls = [];
+  const ui = app({ fetch: async (url, options) => {
+    calls.push({ url, options });
+    return json(snapshot());
+  } });
+  ui.set("remembered", sharedSession());
+  ui.run("api.baseUrl = remembered.apiBaseUrl; catalog.loaded = true; party.sessions = [remembered]; openPartyDialog(); setPartyMode('join')");
+  ui.nodes.get("party-join-link").value = `https://alexriosj.github.io/movie-night/#party=${"b".repeat(64)}`;
+  ui.nodes.get("party-display-name").value = "Name will not replace identity";
+  await ui.run("submitParty({ preventDefault() {} })");
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].options.method, "GET");
+  assert.equal(ui.run("party.session.memberId"), sharedSession().memberId);
+  assert.equal(ui.nodes.get("party-dialog").open, false);
+});
+
+test("copy feedback stays inside the modal, including the manual-copy fallback", async () => {
+  const ui = app();
+  enterParty(ui);
+  ui.run("openPartyDialog(); navigator.clipboard = { writeText: async (value) => { window.copied = value; } }");
+  await ui.nodes.get("party-copy").listeners.click();
+  assert.equal(ui.window.copied, ui.nodes.get("party-link").value);
+  assert.equal(ui.nodes.get("party-copy-status").hidden, false);
+  assert.match(ui.nodes.get("party-copy-status").textContent, /Enlace copiado/);
+  ui.run("navigator.clipboard.writeText = async () => { throw new TypeError('Permission denied'); }");
+  await ui.nodes.get("party-copy").listeners.click();
+  assert.match(ui.nodes.get("party-copy-status").textContent, /Copia el enlace seleccionado/);
+  assert.equal(ui.run("document.activeElement === $('party-link')"), true);
+});
+
+test("connection and storage warnings remain visible outside the closed modal", () => {
+  const ui = app();
+  enterParty(ui);
+  ui.run("party.error = 'Connection lost'; party.storageError = 'Storage denied'; renderParty()");
+  assert.equal(ui.nodes.get("party-notice").hidden, false);
+  assert.match(ui.nodes.get("party-notice").textContent, /Connection lost.*Storage denied/);
+  assert.equal(ui.nodes.get("party-trigger-warning").hidden, false);
+  ui.run("openPartyDialog()");
+  assert.equal(ui.nodes.get("party-notice").hidden, true);
+  assert.equal(ui.nodes.get("party-status").textContent, "Connection lost");
+  assert.equal(ui.nodes.get("party-storage-notice").hidden, false);
+  ui.run("closePartyDialog()");
+  assert.equal(ui.nodes.get("party-notice").hidden, false);
+  ui.run("party.error = ''; party.storageError = ''; renderParty()");
+  assert.equal(ui.nodes.get("party-notice").hidden, true);
+  assert.equal(ui.nodes.get("party-trigger-warning").hidden, true);
+});
+
+test("the party modal preserves all interface styles and modes without hiding appearance controls", () => {
+  for (const theme of themeNames) {
+    for (const colorMode of colorModes) {
+      const ui = app();
+      ui.set("theme", theme);
+      ui.set("colorMode", colorMode);
+      ui.run("state.theme = theme; state.colorMode = colorMode; renderTheme(); closeThemeMenu()");
+      ui.nodes.get("theme-toggle").listeners.click();
+      assert.equal(ui.nodes.get("theme-menu").hidden, false);
+      ui.nodes.get("party-trigger").listeners.click();
+      assert.equal(ui.nodes.get("theme-menu").hidden, true);
+      assert.equal(ui.nodes.get("party-dialog").open, true);
+      assert.equal(ui.document.documentElement.dataset.theme, theme);
+      assert.equal(ui.document.documentElement.dataset.colorMode, colorMode);
+      ui.nodes.get("party-close").listeners.click();
+      ui.nodes.get("color-mode-toggle").listeners.click();
+      assert.equal(ui.run("state.colorMode"), colorMode === "light" ? "dark" : "light");
+    }
+  }
+  assert.doesNotMatch(styles, /var\(--secondary\)/);
+  assert.match(styles, /\.party-trigger-warning\s*\{[^}]*color: var\(--on-accent\)/);
+});
+
 test("creating a party submits a name without uploading personal movies or drafts", async () => {
   const calls = [];
   const ui = app({ fetch: async (url, options) => {
@@ -823,6 +989,7 @@ test("creating a party submits a name without uploading personal movies or draft
   ui.set("personal", movie(99));
   ui.run("api.baseUrl = 'https://api.example.com'; catalog.loaded = true; saveApiMovie(personal); state.draft.place = 'Private'; persistState()");
   const original = ui.storage.get("movie-night:v1");
+  ui.run("openPartyDialog()");
   ui.nodes.get("party-name").value = "Friday movies";
   ui.nodes.get("party-display-name").value = "Alex";
   await ui.run("submitParty({ preventDefault() {} })");
@@ -834,7 +1001,13 @@ test("creating a party submits a name without uploading personal movies or draft
   assert.equal(ui.storage.get("movie-night:v1"), original);
   assert.equal(ui.run("party.session.name"), "Friday movies");
   assert.match(ui.nodes.get("party-link").value, /\/movie-night\/#party=b{64}$/);
+  assert.equal(ui.nodes.get("party-dialog").open, true);
+  assert.equal(ui.nodes.get("party-options").open, false);
+  assert.equal(ui.nodes.get("party-current").hidden, false);
+  assert.equal(ui.run("document.activeElement === $('party-copy')"), true);
   ui.run("leaveParty()");
+  assert.equal(ui.nodes.get("party-dialog").open, false);
+  assert.equal(ui.nodes.get("party-trigger-name").textContent, "Modo personal");
   assert.equal(ui.run("state.movies[0].id"), "tmdb-99");
   assert.equal(ui.run("state.draft.place"), "Private");
 });
@@ -848,6 +1021,8 @@ test("invitation fragments prompt for a name and join without an existing bearer
     } });
   await ui.run("partyReady");
   assert.equal(ui.nodes.get("party-options").open, true);
+  assert.equal(ui.nodes.get("party-dialog").open, true);
+  assert.equal(ui.run("document.activeElement === $('party-display-name')"), true);
   assert.equal(ui.nodes.get("party-name-field").hidden, true);
   ui.run("api.baseUrl = 'https://api.example.com'; catalog.loaded = true");
   ui.nodes.get("party-display-name").value = "Alex";
@@ -876,6 +1051,7 @@ test("remembered membership resumes on reload and invitation reuse never creates
     assert.equal(requests[0].options.headers.Authorization, `Bearer ${current.token}`);
     assert.equal(ui.run("state.movies[0].addedByName"), "Alex");
     assert.equal(ui.run("party.loading"), false);
+    assert.equal(ui.nodes.get("party-dialog").open, false);
   }
 });
 

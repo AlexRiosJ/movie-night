@@ -1070,6 +1070,7 @@ document.addEventListener("click", (event) => {
   if (!event.target.closest("#picker-options")) $("picker-options").open = false;
 });
 document.addEventListener("keydown", (event) => {
+  if ($("party-dialog").open) return;
   if (event.key === "Enter" && event.target.matches('input[name="theme"]') && !$("theme-menu").hidden) {
     event.preventDefault();
     closeThemeMenu(true);

@@ -7,6 +7,7 @@ const party = {
   session: null, snapshot: null, revision: -1, sessions: [], activeId: null,
   localState: null, loading: false, writing: false, entering: false,
   error: "", storageError: "", storageWritable: true, epoch: 0, timer: null, polling: false,
+  formMode: "create",
 };
 
 class PartyApiError extends Error {}
@@ -193,6 +194,9 @@ function activateParty(session, snapshot = null) {
   party.loading = !snapshot;
   party.polling = false;
   party.error = "";
+  party.formMode = "create";
+  $("party-options").open = false;
+  $("party-copy-status").hidden = true;
   state = { ...freshState(), theme: state.theme, colorMode: state.colorMode };
   if (snapshot) applyPartySnapshot(snapshot, true);
   else renderAll();
@@ -216,12 +220,13 @@ function leaveParty() {
   party.epoch += 1;
   Object.assign(party, {
     session: null, snapshot: null, activeId: null, localState: null,
-    revision: -1, loading: false, polling: false, error: "",
+    revision: -1, loading: false, polling: false, error: "", formMode: "create",
   });
   rememberParties();
   clearPartyInvitation();
   renderAll();
   renderParty();
+  closePartyDialog();
 }
 
 function sharedBusy() {
@@ -283,17 +288,70 @@ function invitationUrl(token) {
   return url.href;
 }
 
+function tokenFromInvitation(value) {
+  let url;
+  try {
+    url = new URL(value);
+  } catch (error) {
+    if (!(error instanceof TypeError)) throw error;
+    throw new PartyApiError("Pega el enlace de invitaci\u00f3n completo que te compartieron.");
+  }
+  const match = /^#party=([a-f0-9]{64})$/.exec(url.hash);
+  if (!["https:", "http:"].includes(url.protocol) || url.username || url.password || !match) {
+    throw new PartyApiError("El enlace de invitaci\u00f3n no es v\u00e1lido. Pide un enlace completo.");
+  }
+  return match[1];
+}
+
+function openPartyDialog() {
+  closeThemeMenu();
+  $("picker-options").open = false;
+  if (!$("party-dialog").open) $("party-dialog").showModal();
+  $("party-trigger").setAttribute("aria-expanded", "true");
+  renderParty();
+}
+
+function closePartyDialog() {
+  if ($("party-dialog").open) $("party-dialog").close();
+}
+
+function setPartyMode(mode) {
+  if (sharedBusy()) {
+    notify("Espera a que termine la operaci\u00f3n de la party.");
+    return;
+  }
+  clearPartyInvitation();
+  party.formMode = mode;
+  party.error = "";
+  renderParty();
+}
+
 async function submitParty(event) {
   event.preventDefault();
   if (sharedBusy()) return;
   if (!$("party-form").reportValidity()) return;
-  const inviteToken = inviteFromLocation();
-  if (window.location.hash.startsWith("#party=") && !inviteToken) { renderParty(); return; }
+  let inviteToken = "";
+  if (party.formMode === "join") {
+    try {
+      inviteToken = tokenFromInvitation($("party-join-link").value.trim());
+    } catch (error) {
+      reportPartyError(error);
+      return;
+    }
+  }
   const displayName = $("party-display-name").value.trim();
   const name = $("party-name").value.trim();
   if (!displayName || (!inviteToken && !name)) {
     party.error = "Escribe tu nombre y, si creas una party, su nombre.";
     renderParty();
+    return;
+  }
+  const remembered = inviteToken && party.sessions.find((session) => session.inviteToken === inviteToken);
+  if (remembered) {
+    clearPartyInvitation();
+    if (party.session?.partyId !== remembered.partyId) await activateParty(remembered);
+    else { party.formMode = "create"; $("party-options").open = false; renderParty(); }
+    if (!party.loading) closePartyDialog();
     return;
   }
   party.entering = true;
@@ -310,7 +368,9 @@ async function submitParty(event) {
     party.sessions.push(session);
     clearPartyInvitation();
     activateParty(session, data.snapshot);
-    $("party-options").open = false;
+    $("party-join-link").value = "";
+    if (inviteToken) closePartyDialog();
+    else if ($("party-dialog").open) $("party-copy").focus();
     notify(inviteToken ? "Ya formas parte de la party." : "Party creada. Comparte el enlace para invitar.");
   } catch (error) {
     reportPartyError(error);
@@ -325,16 +385,31 @@ async function submitParty(event) {
 function renderParty() {
   const current = party.snapshot;
   const member = current?.members.find((item) => item.id === party.session.memberId);
-  const invitation = inviteFromLocation();
-  $("party-title").textContent = current ? current.party.name : party.session ? "Conectando con tu party" : "Tu espacio de movie nights";
+  const joining = party.formMode === "join";
+  const partyName = current?.party.name || party.session?.name || "Tu party";
+  const warning = [party.error, party.storageError].filter(Boolean).join(" ");
+  $("party-trigger-name").textContent = party.session ? partyName : "Modo personal";
+  $("party-trigger-label").textContent = party.session ? "En party" : "Movie party";
+  $("party-trigger").dataset.active = String(Boolean(party.session));
+  const triggerLabel = party.session ? `Party: ${partyName}. Ver participantes y compartir enlace.`
+    : "Party: modo personal. Crear o unirme a una party.";
+  $("party-trigger").setAttribute("aria-label", triggerLabel + (warning ? " Hay un aviso pendiente." : ""));
+  $("party-trigger").title = triggerLabel;
+  $("party-trigger-warning").hidden = !warning;
+  $("party-notice").textContent = warning;
+  $("party-notice").hidden = !warning || $("party-dialog").open;
+  $("party-title").textContent = party.session ? partyName : "Mejor con tu gente.";
+  $("party-dialog-label").textContent = party.session ? "TU PARTY" : "MOVIE NIGHTS, EN COMPA\u00d1\u00cdA";
   $("party-identity").textContent = member
     ? `Participas como ${member.name}${member.role === "host" ? " (anfitri\u00f3n)" : ""}.`
-    : party.session ? "Esperando la lista compartida." : "Modo personal: tu colecci\u00f3n no se comparte.";
+    : party.session ? "Esperando la lista compartida." : "Una lista y un plan para todo el grupo. Tu colecci\u00f3n personal sigue siendo solo tuya.";
+  $("party-current").hidden = !party.session;
   $("party-members").textContent = current ? `Participantes: ${current.members.map((item) => item.name).join(", ")}` : "";
   $("party-status").textContent = party.error || (party.writing ? "Guardando en la party\u2026"
     : party.entering ? "Preparando tu sesi\u00f3n\u2026" : party.loading ? "Cargando la party\u2026"
     : current ? "Lista compartida. Actualizaci\u00f3n autom\u00e1tica cada 5 segundos." : "");
   $("party-status").setAttribute("role", party.error ? "alert" : "status");
+  $("party-status").hidden = !$("party-status").textContent;
   $("party-storage-notice").textContent = party.storageError;
   $("party-storage-notice").hidden = !party.storageError;
   $("party-invite").hidden = !party.session;
@@ -343,12 +418,26 @@ function renderParty() {
   $("party-leave").disabled = party.writing || party.entering;
   $("party-refresh").hidden = !party.session;
   $("party-refresh").disabled = party.writing || party.entering;
+  $("party-refresh").textContent = party.error ? "Reintentar conexi\u00f3n" : "Actualizar ahora";
+  $("party-setup-notice").hidden = Boolean(api.baseUrl);
   $("party-create").disabled = sharedBusy() || !api.baseUrl;
-  $("party-create").textContent = invitation ? "Unirme a la party" : "Crear party";
-  $("party-name-field").hidden = Boolean(invitation);
-  $("party-name").required = !invitation;
-  $("party-form-help").textContent = invitation
-    ? "Te han invitado. Escribe tu nombre para compartir la lista; no necesitas una cuenta."
+  $("party-create").textContent = party.entering ? "Conectando\u2026" : joining ? "Unirme a la party" : "Crear party";
+  $("party-form").setAttribute("aria-busy", String(party.entering));
+  $("party-name-field").hidden = joining;
+  $("party-name").required = !joining;
+  $("party-name").disabled = joining || party.entering;
+  $("party-join-field").hidden = !joining;
+  $("party-join-link").required = joining;
+  $("party-join-link").disabled = !joining || party.entering;
+  $("party-display-name").disabled = party.entering;
+  $("party-mode-create").setAttribute("aria-pressed", String(!joining));
+  $("party-mode-join").setAttribute("aria-pressed", String(joining));
+  $("party-mode-create").disabled = sharedBusy();
+  $("party-mode-join").disabled = sharedBusy();
+  $("party-options-summary").hidden = !party.session;
+  if (!party.session) $("party-options").open = true;
+  $("party-form-help").textContent = joining
+    ? "Pega la invitaci\u00f3n y escribe tu nombre para entrar a la lista del grupo."
     : "Crea una lista nueva para tu grupo. Tu colecci\u00f3n personal no se subir\u00e1.";
   $("party-resume").hidden = !party.sessions.some((saved) => saved.partyId !== party.session?.partyId);
   const select = $("party-sessions");
@@ -379,7 +468,7 @@ function renderParty() {
 
 async function followPartyInvitation() {
   const token = inviteFromLocation();
-  if (!token) { renderParty(); return; }
+  if (!token && !window.location.hash.startsWith("#party=")) { renderParty(); return; }
   const remembered = party.sessions.find((session) => session.inviteToken === token);
   if (remembered) {
     clearPartyInvitation();
@@ -387,9 +476,11 @@ async function followPartyInvitation() {
     renderParty();
     return;
   }
+  party.formMode = "join";
+  $("party-join-link").value = window.location.href;
   $("party-options").open = true;
-  renderParty();
-  $("party-display-name").focus();
+  openPartyDialog();
+  $(token ? "party-display-name" : "party-join-link").focus();
 }
 
 async function initializeParties() {
@@ -409,24 +500,44 @@ async function initializeParties() {
     party.storageWritable = false;
     partyStorageError(error);
   }
+  $("party-trigger").addEventListener("click", openPartyDialog);
+  $("party-close").addEventListener("click", closePartyDialog);
+  $("party-dialog").addEventListener("close", () => {
+    $("party-trigger").setAttribute("aria-expanded", "false");
+    renderParty();
+    $("party-trigger").focus({ preventScroll: true });
+  });
+  $("party-dialog").addEventListener("click", (event) => {
+    if (event.target !== $("party-dialog")) return;
+    const bounds = $("party-dialog").getBoundingClientRect();
+    if (event.clientX < bounds.left || event.clientX > bounds.right
+      || event.clientY < bounds.top || event.clientY > bounds.bottom) closePartyDialog();
+  });
+  $("party-mode-create").addEventListener("click", () => setPartyMode("create"));
+  $("party-mode-join").addEventListener("click", () => setPartyMode("join"));
   $("party-form").addEventListener("submit", submitParty);
   $("party-leave").addEventListener("click", leaveParty);
   $("party-refresh").addEventListener("click", refreshParty);
-  $("party-resume-button").addEventListener("click", () => {
+  $("party-resume-button").addEventListener("click", async () => {
     if (sharedBusy()) return;
     const session = party.sessions.find((saved) => saved.partyId === $("party-sessions").value);
-    if (session) { clearPartyInvitation(); activateParty(session); }
+    if (session) {
+      clearPartyInvitation();
+      await activateParty(session);
+      if (!party.loading) closePartyDialog();
+    }
   });
   $("party-copy").addEventListener("click", async () => {
     try {
       await navigator.clipboard.writeText($("party-link").value);
-      notify("Enlace copiado. Cualquiera que lo tenga puede unirse.");
+      $("party-copy-status").textContent = "Enlace copiado. Ya puedes compartirlo con tu grupo.";
     } catch (error) {
       console.error("Movie Night: copy invitation", error);
       $("party-link").focus();
       $("party-link").select();
-      notify("No se pudo copiar autom\u00e1ticamente. Copia el enlace seleccionado.");
+      $("party-copy-status").textContent = "No se pudo copiar autom\u00e1ticamente. Copia el enlace seleccionado.";
     }
+    $("party-copy-status").hidden = false;
   });
   window.addEventListener("hashchange", () => {
     if (sharedBusy()) {

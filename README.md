@@ -2,11 +2,13 @@
 
 A Spanish-language movie-night planner built with plain HTML, CSS, and JavaScript.
 Search and discover movies through **The Movie Database (TMDB)**, choose food,
-and keep a personal collection and movie-night plans in your browser.
+and keep a personal collection and movie-night plans in your browser, or share
+a party's collection and plans with friends.
 
 The frontend still runs on GitHub Pages without a build step. A small
 **Cloudflare Worker** proxies TMDB requests so the shared TMDB credential never
-appears in the frontend. Visitors do not need accounts or API keys.
+appears in the frontend. Optional **Cloudflare D1** storage enables shared parties
+without accounts. Visitors do not need TMDB API keys.
 
 ## Project structure
 
@@ -16,12 +18,18 @@ movie-night/
   styles.css          Responsive layout and five theme palettes
   config.js           Public proxy URL only (never a token)
   app.js              API client, catalog, collection, plans, and localStorage
+  parties.js          Party sessions, invitations, mutations, and polling
   app.test.mjs        Frontend behavior tests using Node's built-in test runner
   assets/
     favicon.svg       Original app icon
   proxy/
-    worker.mjs        Read-only TMDB proxy
-    worker.test.mjs   Proxy tests using Node's built-in test runner
+    worker.mjs        TMDB proxy, origin validation, and party routing
+    worker.test.mjs   TMDB proxy tests using Node's built-in test runner
+    parties.mjs       Authenticated shared-party API backed by D1
+    parties.test.mjs  API tests using the real schema and node:sqlite
+    d1-fixture.mjs    Shared SQLite adapter for API and browser-session tests
+    migrations/
+      0001_parties.sql Parties, members, movies, plans, limits, and revisions
     wrangler.jsonc    Cloudflare deployment configuration
     .dev.vars.example Local development environment example (no real secrets)
   .nojekyll           Publish static files without Jekyll processing
@@ -72,12 +80,98 @@ work. There is no embedded sample catalog masquerading as live API results.
    `localhost` and `127.0.0.1` during local development.
 6. Publish the frontend files to GitHub Pages and open **Explorar**.
 
-The proxy only exposes movie discovery/search and movie details, rather than
+The TMDB proxy only exposes movie discovery/search and movie details, rather than
 arbitrary TMDB routes or arbitrary upstream URLs. Origin restrictions are browser
 CORS protection, **not authentication**: non-browser clients can make requests.
 Configure Cloudflare rate limiting and monitor Worker/TMDB usage for a public
 deployment. TMDB rate-limit failures are shown to visitors rather than silently
 replacing results with a small local list.
+
+## Enable shared parties (optional)
+
+Parties use the same Worker URL and `ALLOWED_ORIGINS` as the catalog, but do not
+require the TMDB secret: manual party movies and plans work independently.
+Without a `PARTY_DB` binding, party requests return an explicit Spanish **503**
+configuration error; the catalog and local-only collection are unaffected.
+No database is provisioned or deployed automatically by this repository.
+
+From the repository root, after signing in to Cloudflare:
+
+1. Create a D1 database:
+
+   ```powershell
+   npx wrangler d1 create movie-night-parties --config proxy\wrangler.jsonc
+   ```
+
+2. In `proxy/wrangler.jsonc`, uncomment the `d1_databases` example. Keep
+   `"binding": "PARTY_DB"`, use the database's actual name, and replace
+   `REPLACE_WITH_ACTUAL_DATABASE_ID` with the **real `database_id` returned by
+   Wrangler**. The checked-in placeholder is not a deployable database ID.
+   Keep `"migrations_dir": "migrations"`; it is relative to the proxy configuration.
+3. Apply the schema to the remote database, then deploy the Worker:
+
+   ```powershell
+   npx wrangler d1 migrations apply movie-night-parties --remote --config proxy\wrangler.jsonc
+   npx wrangler deploy --config proxy\wrangler.jsonc
+   ```
+
+   Review Wrangler's target database and migration prompts before accepting.
+   Back up an existing database before future schema changes. Keep the existing
+   TMDB secret if the live catalog is also enabled.
+4. For a **separate local development database**, apply the same migration locally
+   before starting Wrangler:
+
+   ```powershell
+   npx wrangler d1 migrations apply movie-night-parties --local --config proxy\wrangler.jsonc
+   npx wrangler dev --config proxy\wrangler.jsonc
+   ```
+
+   Local D1 state is stored in Wrangler's ignored `.wrangler` directory, not in the
+   remote database. Match the local frontend origin as described below. Use a local
+   Worker URL in `config.js` for local testing.
+
+**Before promoting a public deployment widely, configure production rate limiting
+for `POST /parties` and `POST /parties/join`**, and appropriate limits for reads and
+mutations. Browser origin checks are not an abuse-control or authentication system.
+Monitor Worker/D1 quotas and storage costs; repeated creation can otherwise create
+unlimited parties. This MVP intentionally does not provide account recovery,
+invitation rotation/revocation, participant removal, or automatic party expiry.
+
+### Party API and limits
+
+- `POST /parties` with `{name, displayName}` creates a party and its host.
+  `POST /parties/join` with `{inviteToken, displayName}` creates a member.
+  Both return `{session: {partyId, memberId, token, inviteToken}, snapshot}`.
+- `GET /parties/{partyId}` returns a snapshot. All requests to a specific party
+  require `Authorization: Bearer <member token>` for membership in that exact party.
+- `POST /parties/{partyId}/movies` accepts `{movie}`; `PATCH` on
+  `/parties/{partyId}/movies/{movieId}` accepts `{watched: boolean}`.
+- `POST /parties/{partyId}/plans` accepts `{plan}`; `PATCH` on
+  `/parties/{partyId}/plans/{planId}` accepts `{completed: boolean}`.
+  `DELETE` on the plan URL is restricted to its creator or the party host.
+  Every successful mutation returns the full snapshot directly.
+- Snapshots contain `{party: {id, name}, revision, members, movies, plans}`.
+  Members expose only `{id, name, role}`. Movies retain the saved-movie shape
+  plus `addedBy`/`addedByName`; plans add `createdBy`/`createdByName`.
+  Authors and initial watched/completed states are derived by the server.
+- Names are trimmed, nonblank, and control-free: party names allow 80 characters,
+  display names 40. Duplicate display names are allowed; identity is a server UUID.
+  Custom titles allow 120 characters; TMDB metadata retains the frontend's bounds.
+  Request bodies are limited to **32 KiB of actual UTF-8 data**, including chunked
+  bodies. Plans require a party movie, known food, valid calendar date and a
+  nonblank location of at most 120 characters.
+- Each party allows **50 participants, 200 movies, and 500 plans**. Additional
+  entries are rejected explicitly with **409**, never silently truncated.
+  A repeat of an existing movie/plan UUID preserves its original content, author,
+  and state, even at capacity. TMDB IDs are canonical `tmdb-N`; custom movies and
+  plans use client-generated UUIDs for retries. Conflicting custom titles
+  (NFKC/Spanish lowercase; custom-title whitespace collapsed) and duplicate
+  movie/food/date/location plans return **409**.
+- SQL row writes, uniqueness constraints, and revision triggers prevent lost
+  additions. Completing a plan and marking its movie watched are atomic.
+  Reopening/deleting a plan does not undo watched history. Each snapshot's
+  revision and all its lists are read in one D1 batch transaction; private
+  responses are `no-store` and never enter the catalog's CDN cache.
 
 ### Run locally
 
@@ -135,9 +229,10 @@ under a custom domain; update the Worker origin allowlist when changing domains.
   and watched filter. Discovery includes released movies with at least 50 votes,
   ordered by popularity, within TMDB's 500-page limit. It is not a uniform draw
   from every movie in TMDB. Up to five pages are tried per pick.
-- **Preferencias > Elegir desde > Mi coleccion** keeps the original local-only
-  random picker, including custom additions. **Solo pendientes** excludes movies
-  marked watched in this browser; it does not mean TMDB knows your viewing history.
+- **Preferencias > Elegir desde > Mi coleccion** (or **Coleccion del grupo** in a
+  party) chooses from the active collection, including custom additions.
+  **Solo pendientes** excludes movies marked watched in that collection;
+  it does not mean TMDB knows your viewing history.
 - Universes are approximate discovery filters: horror/mystery for spooky,
   comedy/romance/family for cozy, science fiction, fantasy, and TMDB's Christmas
   keyword. Other genres have their own collection category. Themes remain
@@ -149,6 +244,18 @@ under a custom domain; update the Worker origin allowlist when changing domains.
   food, date, and location to save a plan. Dates are local, not UTC.
 - Completing a plan marks its movie watched. Reopening or deleting a plan does
   not erase viewing history. Deleting a plan asks for confirmation.
+- Create a **party** with a party name and display name, then share its invitation.
+  Joining requires a display name, not an account. While a party is active,
+  additions, watched status, plans, and their authors are shared. All members may
+  add and toggle entries; only a plan's creator or the host can delete it.
+- The invitation uses a `#party=TOKEN` URL fragment. **Anyone holding this link
+  can join**, read the party, and make member-level changes; only share it with
+  people you trust. The fragment is not sent to GitHub Pages in the page request,
+  but its token is sent to the Worker when joining.
+- Shared lists refresh by polling about every **5 seconds** while the page is
+  visible, and after writes. Older revisions cannot replace newer state. This
+  is not a WebSocket/live-presence service; changes to the same watched/completed
+  flag use the last committed write.
 
 Searches and selections have loading, empty, error, and retry states. A later
 search/selection or filter change cannot be overwritten by a slower old request.
@@ -157,37 +264,71 @@ Failures leave the previous selected movie and saved plans intact. Use
 
 ## Storage and privacy
 
-Movies (including selected TMDB metadata), watched status, plans, draft fields,
-filters, theme, and active list are stored under `movie-night:v1` in localStorage.
+In **local mode**, movies (including selected TMDB metadata), watched status,
+plans, draft fields, filters, theme, and active list are stored under
+`movie-night:v1` in localStorage.
 Existing collections and plans are preserved; the new catalog does not reset or
 automatically replace them. A legacy entry with the same title and release year
 can receive TMDB details while keeping its ID, watched status, and plan references.
 Custom movies are not guessed or automatically matched to an ambiguous API result.
 
-Collections and plans are not uploaded. Search terms, universe filters, page
-numbers, and selected TMDB IDs go through the configured Worker to TMDB. Posters
+Local collections and plans are not uploaded, including when you create or join a
+party: there is **no implicit upload of a legacy collection**. Party mode uses a
+separate shared list; only movies and plans explicitly added while it is active
+are uploaded. Returning to local mode restores the separate personal collection.
+
+In **party mode**, Cloudflare D1 stores the party name, member names/roles,
+selected movie metadata and attribution, watched state, and plans with their
+dates/locations and authors. These are visible to every member and to the
+deployment's database administrator. Avoid entering sensitive personal details.
+Member and invitation credentials are independent, cryptographically random
+32-byte tokens; D1 stores only their SHA-256 hashes. API snapshots never expose
+credential hashes or tokens. The raw invitation is returned only on creation/join,
+and the raw member token only when that member is created.
+
+Membership credentials are remembered in this browser's localStorage under
+`movie-night:parties:v1`, scoped to the configured Worker URL. Treat browser access,
+stored credentials, and invitation links as sensitive. Clearing site data, private
+browsing, switching browser/device/origin, or losing storage can lose your member
+identity and host privileges; a display name does not recover them. Rejoining with
+an invitation creates a **new member**, not the old identity, and consumes another
+participant slot. There are no accounts or recovery/invitation-rotation controls
+in this MVP. Shared data remains on the server when browser data is cleared.
+
+Party drafts (including unfinished date/place edits), theme, filters and view
+preferences remain local under `movie-night:party-view:<partyId>`; they are not
+shared until you explicitly save a plan. Party lists require a working Worker
+connection; failed saves are not silently converted into local-only changes.
+
+Search terms, universe filters, page numbers, and selected TMDB IDs go through the
+configured Worker to TMDB. Posters
 load directly from TMDB's image CDN, and the attribution logo loads from TMDB.
 These services receive normal network information such as IP addresses. There
 are no third-party fonts or analytics in the app.
 
-The collection does not sync across devices or origins. Tabs on the same origin
+The **local collection** does not sync across devices or origins. Tabs on the same origin
 listen for saved changes; simultaneous writes use last-write-wins behavior.
 Private browsing or clearing site data may remove your collection. Export the
 key's JSON using browser developer tools before clearing storage for a backup.
 
-Unavailable/full storage shows a visible warning. Invalid or incompatible data
-is preserved without overwriting it, and persistence is disabled for that session.
+Unavailable/full storage shows a visible warning. Invalid or incompatible local
+collection data is preserved without overwriting it, and local persistence is disabled for that session.
 To recover, back up the raw value, remove only `movie-night:v1`, and reload.
 
-Saved metadata works without contacting the API, but posters still need a network
-connection. This is not an installable/offline PWA.
+Locally saved metadata works without contacting the API, but party synchronization
+and posters still need a network connection. This is not an installable/offline PWA.
 
 ## Development checks
 
-No npm packages are needed for the dependency-free tests (Node.js 22 or newer):
+No npm packages are needed for the dependency-free tests. Use **Node.js 22.13 or
+newer** with built-in `node:sqlite` support (a current Node LTS is recommended):
 
 ```sh
-node --test app.test.mjs proxy/worker.test.mjs
+node --test app.test.mjs proxy/worker.test.mjs proxy/parties.test.mjs
 ```
 
-The tests use deterministic API fixtures and do not require real credentials.
+The tests use deterministic TMDB fixtures and an in-memory SQLite database with
+the actual D1 migration and transactional batch adapter. They exercise identities,
+authorization/isolation, attribution, retries, concurrent additions, atomic plan
+completion, limits and CORS. SQLite may print an experimental-feature warning on
+Node 22. No real credentials, remote database, provisioning or deployment is needed.

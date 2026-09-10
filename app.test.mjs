@@ -3,8 +3,10 @@ import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import vm from "node:vm";
 import worker from "./proxy/worker.mjs";
+import { D1Database } from "./proxy/d1-fixture.mjs";
 
-const source = readFileSync(new URL("./app.js", import.meta.url), "utf8");
+const source = readFileSync(new URL("./parties.js", import.meta.url), "utf8")
+  + "\n" + readFileSync(new URL("./app.js", import.meta.url), "utf8");
 const html = readFileSync(new URL("./index.html", import.meta.url), "utf8");
 const movie = (id = 42, overrides = {}) => ({
   id: `tmdb-${id}`, tmdbId: id, title: `Movie ${id}`, genre: "sci-fi",
@@ -52,12 +54,16 @@ class Element {
   contains() { return false; }
   focus() {}
   scrollIntoView() {}
+  select() {}
   reportValidity() { return true; }
   setCustomValidity() {}
   reset() {}
 }
 
-function app({ raw = null, config = "", fetch = async () => { throw new Error("Unexpected request"); } } = {}) {
+function app({
+  raw = null, partyRaw = null, config = "", href = "https://alexriosj.github.io/movie-night/",
+  fetch = async () => { throw new Error("Unexpected request"); },
+} = {}) {
   const nodes = new Map([...html.matchAll(/\bid="([^"]+)"/g)].map((match) => [match[1], new Element()]));
   for (const id of ["movie-row-template", "plan-row-template", "catalog-row-template"]) {
     nodes.get(id).content = { firstElementChild: new Element() };
@@ -70,23 +76,32 @@ function app({ raw = null, config = "", fetch = async () => { throw new Error("U
     return nodes.get(id);
   };
   document.createDocumentFragment = () => new Element();
+  document.createElement = () => new Element();
   const storage = new Map(raw === null ? [] : [["movie-night:v1", raw]]);
+  if (partyRaw !== null) storage.set("movie-night:parties:v1", partyRaw);
   const window = new Element();
   window.MOVIE_NIGHT_CONFIG = { apiBaseUrl: config };
+  window.location = new URL(href);
+  window.history = { replaceState: (_state, _title, url) => { window.location = new URL(url, window.location); } };
+  window.confirm = () => true;
   const errors = [];
+  const timers = new Map();
+  let timerId = 0;
   const context = vm.createContext({
     document, window, localStorage: {
       getItem: (key) => storage.get(key) ?? null,
       setItem: (key, value) => storage.set(key, value),
     },
-    URL, Response, TypeError, SyntaxError, AbortController, AbortSignal,
-    fetch, crypto, setTimeout: () => 0, clearTimeout() {},
+    URL, Response, TypeError, SyntaxError, AbortController, AbortSignal, navigator: {},
+    fetch, crypto,
+    setTimeout: (callback, delay) => { const id = ++timerId; timers.set(id, { callback, delay }); return id; },
+    clearTimeout: (id) => timers.delete(id),
     getComputedStyle: () => ({ getPropertyValue: () => "#fff" }),
     console: { error: (...args) => errors.push(args) },
   });
   vm.runInContext(source, context);
   return {
-    nodes, storage, context, errors, window,
+    nodes, storage, context, errors, window, timers,
     run: (code) => vm.runInContext(code, context),
     set(name, value) { context[name] = value; },
   };
@@ -316,4 +331,379 @@ test("the real proxy response contract works from catalog through saved movie de
   assert.equal(ui.run("state.movies[0].title"), "Live-shaped title");
   assert.equal(ui.nodes.get("movie-cast").textContent, "An actor");
   assert.equal(ui.run("isValidState(state)"), true);
+});
+
+const sharedSession = () => ({
+  partyId: "00000000-0000-4000-8000-000000000001",
+  memberId: "00000000-0000-4000-8000-000000000002",
+  token: "a".repeat(64), inviteToken: "b".repeat(64), apiBaseUrl: "https://api.example.com",
+});
+const sharedMovie = (id = 42, overrides = {}) => ({
+  ...movie(id), watched: false, custom: false,
+  addedBy: sharedSession().memberId, addedByName: "Alex", ...overrides,
+});
+const sharedPlan = (overrides = {}) => ({
+  id: "00000000-0000-4000-8000-000000000003", movieId: "tmdb-42",
+  foodId: "pizza", date: "2026-09-09", place: "Home", completed: false,
+  createdBy: sharedSession().memberId, createdByName: "Alex", ...overrides,
+});
+const snapshot = ({ movies = [], plans = [], revision = 0, members = [] } = {}) => ({
+  party: { id: sharedSession().partyId, name: "Friday movies" }, revision, movies, plans,
+  members: [{ id: sharedSession().memberId, name: "Alex", role: "host" }, ...members],
+});
+function enterParty(ui, data = snapshot()) {
+  ui.set("session", sharedSession());
+  ui.set("snapshot", data);
+  ui.run("api.baseUrl = session.apiBaseUrl; catalog.loaded = true; activateParty(session, snapshot)");
+}
+
+test("creating a party submits a name without uploading personal movies or drafts", async () => {
+  const calls = [];
+  const ui = app({ fetch: async (url, options) => {
+    calls.push({ url, options });
+    return json({ session: sharedSession(), snapshot: snapshot() });
+  } });
+  ui.set("personal", movie(99));
+  ui.run("api.baseUrl = 'https://api.example.com'; catalog.loaded = true; saveApiMovie(personal); state.draft.place = 'Private'; persistState()");
+  const original = ui.storage.get("movie-night:v1");
+  ui.nodes.get("party-name").value = "Friday movies";
+  ui.nodes.get("party-display-name").value = "Alex";
+  await ui.run("submitParty({ preventDefault() {} })");
+  assert.equal(calls[0].url.pathname, "/parties");
+  assert.deepEqual(JSON.parse(calls[0].options.body), { name: "Friday movies", displayName: "Alex" });
+  assert.equal(calls[0].options.headers.Authorization, undefined);
+  assert.equal(ui.run("state.movies.length"), 0);
+  assert.equal(ui.run("state.draft.place"), "");
+  assert.equal(ui.storage.get("movie-night:v1"), original);
+  assert.equal(ui.run("party.session.name"), "Friday movies");
+  assert.match(ui.nodes.get("party-link").value, /\/movie-night\/#party=b{64}$/);
+  ui.run("leaveParty()");
+  assert.equal(ui.run("state.movies[0].id"), "tmdb-99");
+  assert.equal(ui.run("state.draft.place"), "Private");
+});
+
+test("invitation fragments prompt for a name and join without an existing bearer", async () => {
+  const calls = [];
+  const ui = app({ href: `https://alexriosj.github.io/movie-night/#party=${"b".repeat(64)}`,
+    fetch: async (url, options) => {
+      calls.push({ url, options });
+      return json({ session: sharedSession(), snapshot: snapshot() });
+    } });
+  await ui.run("partyReady");
+  assert.equal(ui.nodes.get("party-options").open, true);
+  assert.equal(ui.nodes.get("party-name-field").hidden, true);
+  ui.run("api.baseUrl = 'https://api.example.com'; catalog.loaded = true");
+  ui.nodes.get("party-display-name").value = "Alex";
+  await ui.run("submitParty({ preventDefault() {} })");
+  assert.equal(calls[0].url.pathname, "/parties/join");
+  assert.deepEqual(JSON.parse(calls[0].options.body), { inviteToken: "b".repeat(64), displayName: "Alex" });
+  assert.equal(calls[0].options.referrerPolicy, "no-referrer");
+  assert.equal(ui.window.location.hash, "");
+});
+
+test("remembered membership resumes on reload and invitation reuse never creates another participant", async () => {
+  const current = sharedSession();
+  const stored = JSON.stringify({ version: 1, activeId: current.partyId, sessions: [current] });
+  for (const hash of ["", `#party=${current.inviteToken}`]) {
+    const calls = [];
+    const ui = app({ config: current.apiBaseUrl, partyRaw: stored,
+      href: `https://alexriosj.github.io/movie-night/${hash}`,
+      fetch: async (url, options) => {
+        calls.push({ url, options });
+        return json(url.pathname === "/movies" ? page([]) : snapshot({ movies: [sharedMovie()] }));
+      } });
+    await ui.run("partyReady");
+    const requests = calls.filter((call) => call.url.pathname.startsWith("/parties"));
+    assert.equal(requests.length, 1);
+    assert.equal(requests[0].options.method, "GET");
+    assert.equal(requests[0].options.headers.Authorization, `Bearer ${current.token}`);
+    assert.equal(ui.run("state.movies[0].addedByName"), "Alex");
+    assert.equal(ui.run("party.loading"), false);
+  }
+});
+
+test("shared TMDB selection writes one movie and keeps original server attribution", async () => {
+  const calls = [];
+  const authorId = "00000000-0000-4000-8000-000000000004";
+  const data = snapshot({ revision: 1, movies: [sharedMovie(42, { addedBy: authorId, addedByName: "Sam", watched: true })],
+    members: [{ id: authorId, name: "Sam", role: "member" }] });
+  const ui = app({ fetch: async (url, options) => {
+    calls.push({ url, options });
+    return json(url.pathname === "/movies/42" ? { movie: movie() } : data);
+  } });
+  enterParty(ui);
+  ui.set("choice", movie());
+  await ui.run("chooseCatalogMovie(choice)");
+  assert.equal(calls[1].url.pathname, `/parties/${sharedSession().partyId}/movies`);
+  assert.equal(JSON.parse(calls[1].options.body).movie.tmdbId, 42);
+  assert.equal(ui.run("state.movies[0].watched"), true);
+  assert.equal(ui.run("state.draft.movieId"), "tmdb-42");
+  assert.match(ui.nodes.get("movie-meta").textContent, /Sam/);
+  assert.equal(ui.nodes.get("movie-list").children.length, 0);
+  assert.equal(ui.storage.has("movie-night:v1"), false);
+});
+
+test("custom additions use shared storage and record server-supplied authors", async () => {
+  let sent;
+  const ui = app({ fetch: async (_url, options) => {
+    sent = JSON.parse(options.body).movie;
+    return json(snapshot({ revision: 1, movies: [{ ...sent, addedBy: sharedSession().memberId, addedByName: "Alex" }] }));
+  } });
+  enterParty(ui);
+  ui.nodes.get("new-movie-title").value = "Our film";
+  ui.nodes.get("new-movie-genre").value = "cozy";
+  await ui.run("addMovie()");
+  assert.equal(sent.title, "Our film");
+  assert.equal(sent.custom, true);
+  assert.equal(ui.run("state.movies[0].addedByName"), "Alex");
+  assert.match(ui.nodes.get("movie-list").children[0].querySelector(".movie-row-meta").textContent, /Alex/);
+  assert.equal(ui.run("isValidState(state)"), true);
+});
+
+test("shared plan operations use separate endpoints and preserve personal draft fields on polling", async () => {
+  const calls = [];
+  let current = snapshot({ movies: [sharedMovie()] });
+  const ui = app({ fetch: async (url, options) => {
+    calls.push({ url, options });
+    if (options.method === "POST") current = snapshot({ revision: 1, movies: [sharedMovie()],
+      plans: [{ ...JSON.parse(options.body).plan, createdBy: sharedSession().memberId, createdByName: "Alex" }] });
+    if (options.method === "PATCH") current = snapshot({ revision: 2, movies: [sharedMovie(42, { watched: true })],
+      plans: [{ ...current.plans[0], completed: true }] });
+    if (options.method === "DELETE") current = snapshot({ revision: 3, movies: [sharedMovie(42, { watched: true })] });
+    return json(current);
+  } });
+  enterParty(ui, current);
+  ui.run("selectMovie('tmdb-42')");
+  ui.nodes.get("plan-date").value = "2026-09-09";
+  ui.nodes.get("plan-place").value = "Our couch";
+  await ui.run("savePlan()");
+  assert.equal(calls[0].options.method, "POST");
+  assert.equal(ui.run("state.plans[0].createdByName"), "Alex");
+  assert.equal(ui.nodes.get("plan-list").children[0].querySelector(".plan-author").textContent, "Plan de Alex");
+  await ui.run("togglePlan(state.plans[0].id)");
+  assert.equal(ui.run("state.movies[0].watched"), true);
+  assert.equal(ui.run("state.plans[0].completed"), true);
+  ui.nodes.get("plan-place").value = "Typing an unfinished draft";
+  await ui.run("refreshParty()");
+  assert.equal(ui.nodes.get("plan-place").value, "Typing an unfinished draft");
+  await ui.run("deletePlan(state.plans[0].id)");
+  assert.equal(calls.at(-1).options.method, "DELETE");
+  assert.equal(ui.run("state.plans.length"), 0);
+  assert.equal(ui.run("state.movies[0].watched"), true);
+});
+
+test("older snapshots cannot undo a concurrent saved change", async () => {
+  const poll = deferred();
+  const ui = app({ fetch: async (_url, options) => options.method === "PATCH"
+    ? json(snapshot({ revision: 3, movies: [sharedMovie(42, { watched: true })] })) : poll.promise });
+  enterParty(ui, snapshot({ revision: 1, movies: [sharedMovie()] }));
+  const refresh = ui.run("refreshParty()");
+  await ui.run("toggleWatched('tmdb-42')");
+  poll.resolve(json(snapshot({ revision: 2, movies: [sharedMovie(), sharedMovie(43)] })));
+  await refresh;
+  assert.equal(ui.run("party.revision"), 3);
+  assert.equal(ui.run("state.movies[0].watched"), true);
+  assert.equal(ui.run("state.movies.length"), 1);
+});
+
+test("failed writes never become local-only shared changes and block double submits", async () => {
+  const pending = deferred();
+  let writes = 0;
+  const ui = app({ fetch: async () => { writes += 1; return pending.promise; } });
+  enterParty(ui, snapshot({ movies: [sharedMovie()] }));
+  const write = ui.run("toggleWatched('tmdb-42')");
+  await ui.run("toggleWatched('tmdb-42')");
+  assert.equal(writes, 1);
+  assert.equal(ui.run("state.movies[0].watched"), false);
+  pending.resolve(json({ error: "Database unavailable" }, 503));
+  await write;
+  assert.equal(ui.run("state.movies[0].watched"), false);
+  assert.equal(ui.nodes.get("party-status").textContent, "Database unavailable");
+  assert.equal(ui.run("party.writing"), false);
+  assert.equal(ui.storage.has("movie-night:v1"), false);
+});
+
+test("late polls cannot replace the personal list after leaving a party", async () => {
+  const pending = deferred();
+  const ui = app({ fetch: async () => pending.promise });
+  ui.set("personal", movie(99));
+  ui.run("saveApiMovie(personal); persistState()");
+  enterParty(ui);
+  const refresh = ui.run("refreshParty()");
+  ui.run("leaveParty()");
+  pending.resolve(json(snapshot({ revision: 1, movies: [sharedMovie()] })));
+  await refresh;
+  assert.equal(ui.run("party.session"), null);
+  assert.equal(ui.run("state.movies[0].id"), "tmdb-99");
+});
+
+test("invalid snapshots and authors never replace a valid party list", async () => {
+  for (const data of [
+    { ...snapshot(), movies: "invalid" },
+    snapshot({ movies: [sharedMovie(42, { addedBy: "unknown" })], revision: 1 }),
+    { ...snapshot({ revision: 1 }), party: { id: "another-party", name: "Other" } },
+  ]) {
+    const ui = app({ fetch: async () => json(data) });
+    enterParty(ui, snapshot({ movies: [sharedMovie()] }));
+    await ui.run("refreshParty()");
+    assert.equal(ui.run("state.movies.length"), 1);
+    assert.equal(ui.run("party.revision"), 0);
+    assert.notEqual(ui.run("party.error"), "");
+  }
+});
+
+test("party draft preferences persist separately and local storage events only update the personal backup", () => {
+  const ui = app();
+  enterParty(ui, snapshot({ movies: [sharedMovie()] }));
+  ui.run("state.draft.place = 'Shared draft'; state.theme = 'cozy'; persistState()");
+  const viewKey = `movie-night:party-view:${sharedSession().partyId}`;
+  const view = JSON.parse(ui.storage.get(viewKey));
+  assert.equal(view.movies, undefined);
+  assert.equal(view.draft.place, "Shared draft");
+  const local = ui.run("JSON.stringify(freshState())");
+  ui.window.listeners.storage({ key: "movie-night:v1", newValue: local });
+  assert.equal(ui.run("state.movies.length"), 1);
+  ui.run("leaveParty()");
+  assert.equal(ui.run("state.movies.length"), 0);
+  enterParty(ui, snapshot({ movies: [sharedMovie()] }));
+  assert.equal(ui.run("state.draft.place"), "Shared draft");
+  assert.equal(ui.run("state.theme"), "cozy");
+});
+
+test("broken invitation links never create a party by accident", async () => {
+  let calls = 0;
+  const ui = app({ href: "https://alexriosj.github.io/movie-night/#party=broken", fetch: async () => { calls += 1; } });
+  ui.run("api.baseUrl = 'https://api.example.com'");
+  ui.nodes.get("party-name").value = "Unexpected";
+  ui.nodes.get("party-display-name").value = "Alex";
+  await ui.run("submitParty({ preventDefault() {} })");
+  assert.equal(calls, 0);
+  assert.match(ui.run("party.error"), /no es v/);
+});
+
+test("changed API origins never receive saved member credentials", async () => {
+  const stored = JSON.stringify({ version: 1, activeId: sharedSession().partyId, sessions: [sharedSession()] });
+  const calls = [];
+  const ui = app({ config: "https://different.example.com", partyRaw: stored,
+    fetch: async (_url, options) => { calls.push(options); return json(page([])); } });
+  await ui.run("partyReady");
+  assert.equal(ui.run("party.session"), null);
+  assert.equal(calls.every((options) => options.headers.Authorization === undefined), true);
+  assert.equal(ui.storage.get("movie-night:parties:v1"), stored);
+});
+
+test("automatic polling runs every five seconds and survives a failed attempt to create another party", async () => {
+  const pending = deferred();
+  let reads = 0;
+  const ui = app({ fetch: async (_url, options) => {
+    if (options.method === "POST") return pending.promise;
+    reads += 1;
+    return json(snapshot({ revision: reads, movies: [sharedMovie()] }));
+  } });
+  enterParty(ui);
+  const timer = ui.timers.get(ui.run("party.timer"));
+  assert.equal(timer.delay, 5000);
+  await timer.callback();
+  assert.equal(ui.run("state.movies.length"), 1);
+  ui.nodes.get("party-name").value = "Another party";
+  ui.nodes.get("party-display-name").value = "Alex";
+  const creating = ui.run("submitParty({ preventDefault() {} })");
+  await ui.timers.get(ui.run("party.timer")).callback();
+  assert.equal(reads, 1);
+  pending.resolve(json({ error: "Try again" }, 503));
+  await creating;
+  await ui.timers.get(ui.run("party.timer")).callback();
+  assert.equal(reads, 2);
+});
+
+test("restoring an unavailable party blocks writes instead of modifying the personal collection", async () => {
+  const pending = deferred();
+  const stored = JSON.stringify({ version: 1, activeId: sharedSession().partyId, sessions: [sharedSession()] });
+  const ui = app({ config: sharedSession().apiBaseUrl, partyRaw: stored,
+    fetch: async (url) => url.pathname === "/movies" ? json(page([])) : pending.promise });
+  assert.equal(ui.run("party.loading"), true);
+  ui.nodes.get("new-movie-title").value = "Do not store locally";
+  ui.nodes.get("new-movie-genre").value = "cozy";
+  await ui.run("addMovie()");
+  assert.equal(ui.run("state.movies.length"), 0);
+  assert.equal(ui.storage.has("movie-night:v1"), false);
+  pending.resolve(json({ error: "Party unavailable" }, 503));
+  await ui.run("partyReady");
+  assert.equal(ui.run("party.loading"), true);
+  assert.equal(ui.nodes.get("save-plan").disabled, true);
+  ui.run("leaveParty()");
+  assert.equal(ui.run("party.loading"), false);
+});
+
+test("members can only see delete controls for their own plans while host sees all", () => {
+  const other = "00000000-0000-4000-8000-000000000004";
+  const ui = app();
+  const data = snapshot({ movies: [sharedMovie()], plans: [sharedPlan({ createdBy: other, createdByName: "Sam" })],
+    members: [{ id: other, name: "Sam", role: "host" }] });
+  data.members[0].role = "member";
+  enterParty(ui, data);
+  assert.equal(ui.nodes.get("plan-list").children[0].querySelector(".delete-plan").hidden, true);
+  ui.run("party.snapshot.members[0].role = 'host'; renderPlans()");
+  assert.equal(ui.nodes.get("plan-list").children[0].querySelector(".delete-plan").hidden, false);
+});
+
+test("unavailable browser storage surfaces a session warning without losing server-saved movies", async () => {
+  const ui = app({ fetch: async () => json(snapshot({ revision: 1, movies: [sharedMovie(42, { watched: true })] })) });
+  enterParty(ui, snapshot({ movies: [sharedMovie()] }));
+  ui.run("localStorage.setItem = () => { throw new TypeError('Storage denied'); }");
+  await ui.run("toggleWatched('tmdb-42')");
+  assert.equal(ui.run("state.movies[0].watched"), true);
+  assert.equal(ui.nodes.get("party-storage-notice").hidden, false);
+  assert.equal(ui.run("party.writing"), false);
+});
+
+test("two independent browser sessions share attributed movies and plans through the real Worker and SQLite", async (t) => {
+  const db = new D1Database();
+  t.after(() => db.sqlite.close());
+  const fetch = (url, options) => worker.fetch(new Request(url, {
+    ...options, headers: { ...options.headers, Origin: "https://alexriosj.github.io" },
+  }), { PARTY_DB: db, ALLOWED_ORIGINS: "https://alexriosj.github.io" });
+  const host = app({ fetch });
+  host.run("api.baseUrl = 'https://api.example.com'; catalog.loaded = true");
+  host.nodes.get("party-name").value = "Shared night";
+  host.nodes.get("party-display-name").value = "Alex";
+  await host.run("submitParty({ preventDefault() {} })");
+  assert.equal(host.run("party.error"), "");
+  const guest = app({ fetch, href: host.nodes.get("party-link").value });
+  guest.run("api.baseUrl = 'https://api.example.com'; catalog.loaded = true");
+  guest.nodes.get("party-display-name").value = "Sam";
+  await guest.run("submitParty({ preventDefault() {} })");
+  assert.equal(guest.run("party.error"), "");
+  assert.equal(guest.run("party.snapshot.members.length"), 2);
+  assert.notEqual(host.run("party.session.memberId"), guest.run("party.session.memberId"));
+
+  for (const [client, title] of [[host, "Alex's movie"], [guest, "Sam's movie"]]) {
+    client.nodes.get("new-movie-title").value = title;
+    client.nodes.get("new-movie-genre").value = "cozy";
+  }
+  await Promise.all([host.run("addMovie()"), guest.run("addMovie()")]);
+  await Promise.all([host.run("refreshParty()"), guest.run("refreshParty()")]);
+  for (const client of [host, guest]) {
+    assert.equal(client.run("state.movies.length"), 2);
+    assert.equal(client.run("state.movies.find(movie => movie.title === \"Alex's movie\").addedByName"), "Alex");
+    assert.equal(client.run("state.movies.find(movie => movie.title === \"Sam's movie\").addedByName"), "Sam");
+    assert.equal(client.run("isValidState(state)"), true);
+  }
+  guest.run("selectMovie(state.movies[0].id)");
+  guest.nodes.get("plan-date").value = "2026-09-10";
+  guest.nodes.get("plan-place").value = "Our couch";
+  await guest.run("savePlan()");
+  await host.run("refreshParty()");
+  assert.equal(host.run("state.plans[0].createdByName"), "Sam");
+  await host.run("togglePlan(state.plans[0].id)");
+  await guest.run("refreshParty()");
+  assert.equal(guest.run("state.plans[0].completed"), true);
+  assert.equal(guest.run("state.movies.find(movie => movie.id === state.plans[0].movieId).watched"), true);
+  const stored = guest.storage.get("movie-night:parties:v1");
+  const reloaded = app({ fetch, config: "https://api.example.com", partyRaw: stored });
+  await reloaded.run("partyReady");
+  assert.equal(reloaded.run("party.error"), "");
+  assert.equal(reloaded.run("party.session.memberId"), guest.run("party.session.memberId"));
+  assert.equal(reloaded.run("state.plans.length"), 1);
+  assert.equal(db.sqlite.prepare("SELECT count(*) AS count FROM party_members").get().count, 2);
 });

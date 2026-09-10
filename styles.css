@@ -106,6 +106,17 @@ h1 { font: 400 clamp(32px, 4.5vw, 44px)/1.2 Georgia, "Times New Roman", serif; l
 h1 em { color: var(--accent); }
 .intro p { margin-top: 9px; color: var(--muted); font-size: 14px; }
 
+.party-panel { display: grid; gap: 10px; margin-bottom: 28px; padding: 18px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface); overflow-wrap: anywhere; }
+.party-panel h2 { font-size: 17px; }
+.party-heading { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 12px; }
+.party-panel summary { color: var(--accent); padding-block: 6px; }
+.party-panel > .button { justify-self: start; }
+.party-form { display: grid; gap: 12px; padding-block: 12px; }
+.party-form > .button { justify-self: start; }
+.party-invite { display: flex; flex-wrap: wrap; align-items: end; gap: 10px; }
+.party-invite label { flex: 1 1 220px; }
+.party-invite > p { flex-basis: 100%; }
+
 /* One continuous planning flow, with secondary settings tucked into a disclosure. */
 .planner { padding-bottom: 28px; border-bottom: 1px solid var(--border); }
 .planner-toolbar { display: flex; justify-content: space-between; align-items: center; gap: 16px; margin-bottom: 20px; }

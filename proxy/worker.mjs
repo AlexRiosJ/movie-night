@@ -1,3 +1,5 @@
+import { handlePartyRequest } from "./parties.mjs";
+
 const TMDB_BASE = "https://api.themoviedb.org/3";
 const CHRISTMAS_KEYWORD = 207317;
 const MOOD_FILTERS = {
@@ -215,7 +217,11 @@ export default {
     if (origin && !allowedOrigin) return withCors(jsonResponse({ error: "Este origen no tiene permiso para consultar el cat\u00e1logo." }, 403), null);
     try {
       if (!allowed.length) throw new HttpError(503, "El proxy necesita configurar ALLOWED_ORIGINS.");
-      const route = parseRoute(new URL(request.url));
+      const url = new URL(request.url);
+      if (url.pathname === "/parties" || url.pathname.startsWith("/parties/")) {
+        return withCors(await handlePartyRequest(request, env), allowedOrigin);
+      }
+      const route = parseRoute(url);
       if (request.method === "OPTIONS") {
         const requestedMethod = request.headers.get("Access-Control-Request-Method");
         if (requestedMethod && requestedMethod !== "GET") throw new HttpError(405, "Solo se permiten consultas GET.");

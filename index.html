@@ -9,6 +9,7 @@
     <link rel="icon" href="./assets/favicon.svg" type="image/svg+xml">
     <link rel="stylesheet" href="./styles.css">
     <script src="./config.js" defer></script>
+    <script src="./parties.js" defer></script>
     <script src="./app.js" defer></script>
   </head>
   <body>
@@ -62,6 +63,36 @@
         <p>Menos decidir, m&aacute;s disfrutar de la noche.</p>
       </header>
 
+      <section class="party-panel" aria-labelledby="party-title">
+        <div class="party-heading">
+          <div><h2 id="party-title">Tu espacio de movie nights</h2><p id="party-identity" class="helper"></p></div>
+          <button id="party-leave" class="button button-secondary" type="button" hidden>Volver a mi lista personal</button>
+        </div>
+        <p id="party-members" class="helper"></p>
+        <p id="party-status" class="helper" role="status" aria-live="polite"></p>
+        <p id="party-storage-notice" class="notice" role="alert" hidden></p>
+        <button id="party-refresh" class="button button-text" type="button" hidden>Actualizar ahora / Reintentar</button>
+        <div id="party-invite" class="party-invite" hidden>
+          <label for="party-link">Enlace de invitaci&oacute;n<input id="party-link" type="text" readonly></label>
+          <button id="party-copy" class="button button-secondary" type="button">Copiar enlace</button>
+          <p class="helper">Cualquiera con este enlace puede unirse, ver la lista y los lugares de los planes. Comp&aacute;rtelo solo con tu grupo.</p>
+        </div>
+        <details id="party-options">
+          <summary>Crear o unirme a una party</summary>
+          <form id="party-form" class="party-form">
+            <p id="party-form-help" class="helper"></p>
+            <label id="party-name-field" for="party-name">Nombre de la party<input id="party-name" type="text" maxlength="80" placeholder="Viernes de pelis" required></label>
+            <label for="party-display-name">Tu nombre<input id="party-display-name" type="text" maxlength="40" autocomplete="nickname" placeholder="C&oacute;mo te llamamos" required></label>
+            <button id="party-create" class="button button-primary" type="submit">Crear party</button>
+            <p class="helper">Sin cuentas. Recordaremos tu identidad en este navegador; cambiar de dispositivo o borrar sus datos crea una identidad nueva. Para unirte a otro grupo, abre su enlace de invitaci&oacute;n.</p>
+          </form>
+          <div id="party-resume" class="party-invite" hidden>
+            <label for="party-sessions">Volver a otra party<select id="party-sessions"></select></label>
+            <button id="party-resume-button" class="button button-secondary" type="button">Abrir party</button>
+          </div>
+        </details>
+      </section>
+
       <!-- El generador y el formulario comparten una seleccion, guardada como borrador. -->
       <section id="planner" class="planner" aria-label="Crea tu movie night">
           <div class="planner-toolbar">
@@ -72,7 +103,7 @@
                 <label for="movie-source">Elegir desde
                   <select id="movie-source">
                     <option value="catalog">Cat&aacute;logo TMDB</option>
-                    <option value="collection">Mi colecci&oacute;n</option>
+                    <option id="collection-source-label" value="collection">Mi colecci&oacute;n</option>
                   </select>
                 </label>
                 <label for="movie-genre">Universo
@@ -190,8 +221,8 @@
       <div id="organizer" class="organizer">
         <div class="view-tabs" role="group" aria-label="Tus listas">
           <button type="button" data-view="catalog" aria-pressed="false" aria-controls="catalog">Explorar</button>
-          <button type="button" data-view="plans" aria-pressed="true" aria-controls="nights">Mis noches <span id="nights-total" class="count">0</span></button>
-          <button type="button" data-view="movies" aria-pressed="false" aria-controls="collection">Mi colecci&oacute;n <span id="collection-total" class="count">0</span></button>
+          <button type="button" data-view="plans" aria-pressed="true" aria-controls="nights"><span id="nights-label">Mis noches</span> <span id="nights-total" class="count">0</span></button>
+          <button type="button" data-view="movies" aria-pressed="false" aria-controls="collection"><span id="collection-label">Mi colecci&oacute;n</span> <span id="collection-total" class="count">0</span></button>
         </div>
         <section id="catalog" aria-labelledby="catalog-heading" hidden>
           <h2 id="catalog-heading" class="sr-only">Explorar el cat&aacute;logo de TMDB</h2>
@@ -224,7 +255,7 @@
             <label for="new-movie-title">T&iacute;tulo de la pel&iacute;cula<input id="new-movie-title" name="title" type="text" maxlength="120" placeholder="Esa que siempre has querido ver..." required></label>
             <div class="add-form-bottom">
               <label for="new-movie-genre">Universo<select id="new-movie-genre" name="genre"><option value="spooky">Spooky season</option><option value="cozy">Cozy oto&ntilde;o</option><option value="sci-fi">Sci-fi</option><option value="fantasy">Fantas&iacute;a</option><option value="christmas">Navidad</option><option value="general">Otros g&eacute;neros</option></select></label>
-              <button class="button button-dark" type="submit">A&ntilde;adir a pendientes</button>
+              <button id="add-movie-submit" class="button button-dark" type="submit">A&ntilde;adir a pendientes</button>
             </div>
           </form>
           <ul id="movie-list" class="movie-list" aria-label="Pel&iacute;culas pendientes"></ul>
@@ -252,7 +283,7 @@
       </div>
 
       <footer class="site-footer">
-        <p>Sin cuentas. Tu colecci&oacute;n y tus planes se guardan en este navegador.</p>
+        <p>Sin cuentas. En modo personal, tus datos se guardan en este navegador. En una party, la lista y los planes se comparten con el grupo.</p>
         <div class="tmdb-attribution" aria-label="Cr&eacute;ditos">
           <a href="https://www.themoviedb.org" target="_blank" rel="noopener noreferrer"><img src="https://www.themoviedb.org/assets/v4/logos/v2/blue_long_2-9665a76b1ae401a510ec1e0ca40ddcb3b0cfe45f1d51b77a308fea0845885648.svg" alt="TMDB" width="100" height="13" loading="lazy" referrerpolicy="no-referrer"></a>
           <p lang="en">This product uses the TMDB API but is not endorsed or certified by TMDB.</p>
@@ -279,6 +310,7 @@
         <span class="plan-date-badge"><svg class="icon small"><use href="#icon-calendar"/></svg><time></time></span>
         <div class="plan-row-copy">
           <h3 class="plan-movie-title"></h3>
+          <p class="plan-author helper"></p>
           <div class="plan-metadata">
             <p class="plan-detail"><svg class="icon small"><use href="#icon-bowl"/></svg><span class="plan-food"></span></p>
             <p class="plan-detail"><svg class="icon small"><use href="#icon-pin"/></svg><span class="plan-location"></span></p>

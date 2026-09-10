@@ -1,20 +1,16 @@
 "use strict";
 
 const STORAGE_KEY = "movie-night:v1";
-const GENRES = {
-  spooky: "Spooky season",
-  cozy: "Cozy oto\u00f1o",
-  "sci-fi": "Sci-fi",
+const THEMES = { movie: "Movie", arcade: "Arcade", zine: "Zine" };
+const COLOR_MODES = { light: "Claro", dark: "Oscuro" };
+const LEGACY_THEMES = ["light", "night", "spooky", "cozy", "sci-fi", "fantasy", "christmas"];
+// Category IDs stay compatible with saved collections and the deployed TMDB proxy.
+const MOVIE_GENRES = {
+  spooky: "Terror y misterio",
+  cozy: "Comedia, romance y familia",
+  "sci-fi": "Ciencia ficci\u00f3n",
   fantasy: "Fantas\u00eda",
-  christmas: "Navidad",
-};
-const MOVIE_GENRES = { ...GENRES, general: "Otros g\u00e9neros" };
-const MOODS = {
-  spooky: "Un poquito de magia.\nUn poquito de misterio.",
-  cozy: "Una taza caliente.\nUna historia bonita.",
-  "sci-fi": "Pr\u00f3xima parada:\notra galaxia.",
-  fantasy: "La magia empieza\ncuando le das al play.",
-  christmas: "Luces encendidas.\nCoraz\u00f3n calentito.",
+  general: "Otros g\u00e9neros",
 };
 const FOODS = [
   { id: "pizza", name: "Pizza para compartir", description: "Tu favorita, reci\u00e9n hecha. La \u00faltima porci\u00f3n se negocia." },
@@ -23,7 +19,7 @@ const FOODS = [
   { id: "snacks", name: "Tabla de snacks", description: "Un poco de queso, fruta, galletas y lo que m\u00e1s te guste." },
   { id: "nachos", name: "Nachos con guacamole", description: "Crujientes, para compartir y con extra de guacamole." },
   { id: "burgers", name: "Hamburguesas caseras", description: "Unas patatas al lado y ya tenemos un plan redondo." },
-  { id: "hot-chocolate", name: "Chocolate y galletas", description: "Una taza calentita, algo dulce y tu manta favorita." },
+  { id: "hot-chocolate", name: "Chocolate y galletas", description: "Chocolate caliente y galletas para compartir." },
   { id: "sandwiches", name: "S\u00e1ndwiches a la plancha", description: "Pan crujiente, queso fundido y comodidad en cada bocado." },
 ];
 
@@ -63,7 +59,8 @@ function freshState() {
     version: 1,
     movies: [],
     plans: [],
-    theme: "spooky",
+    theme: "movie",
+    colorMode: "light",
     draft: { movieId: null, foodId: null, date: localToday(), place: "" },
     preferences: { genre: "all", pendingOnly: true, autoFood: true, movieTab: "pending", planTab: "scheduled", view: "catalog" },
   };
@@ -91,6 +88,10 @@ function isGenre(value) {
   return typeof value === "string" && Object.hasOwn(MOVIE_GENRES, value);
 }
 
+function normalizeMovieGenre(movie) {
+  return movie.genre === "christmas" ? { ...movie, genre: "general" } : movie;
+}
+
 function isStringList(value, count, length) {
   return Array.isArray(value) && value.length <= count && value.every((item) => isText(item, length));
 }
@@ -100,7 +101,8 @@ function isPosterPath(value) {
 }
 
 function isMovieData(movie) {
-  return isRecord(movie) && isText(movie.id, 100) && isText(movie.title, 300) && isGenre(movie.genre)
+  return isRecord(movie) && isText(movie.id, 100) && isText(movie.title, 300)
+    && (isGenre(movie.genre) || movie.genre === "christmas")
     && (movie.year === null || (Number.isInteger(movie.year) && movie.year >= 1888 && movie.year <= 2200))
     && (movie.minutes === null || (Number.isInteger(movie.minutes) && movie.minutes > 0 && movie.minutes <= 1000))
     && isText(movie.description, 6000);
@@ -116,7 +118,9 @@ function isTmdbData(movie) {
 
 // Validate stored data and references before rendering. Damaged data is never overwritten.
 function isValidState(value) {
-  if (!isRecord(value) || value.version !== 1 || !Object.hasOwn(GENRES, value.theme)
+  if (!isRecord(value) || value.version !== 1 || typeof value.theme !== "string"
+    || !(Object.hasOwn(THEMES, value.theme) || LEGACY_THEMES.includes(value.theme))
+    || (value.colorMode !== undefined && (typeof value.colorMode !== "string" || !Object.hasOwn(COLOR_MODES, value.colorMode)))
     || !Array.isArray(value.movies) || !Array.isArray(value.plans)
     || !isRecord(value.draft) || !isRecord(value.preferences)) return false;
 
@@ -140,7 +144,7 @@ function isValidState(value) {
     && (draft.foodId === null || foodExists(draft.foodId))
     && (draft.date === "" || isValidDate(draft.date))
     && typeof draft.place === "string" && draft.place.length <= 120
-    && (preferences.genre === "all" || isGenre(preferences.genre))
+    && (preferences.genre === "all" || isGenre(preferences.genre) || preferences.genre === "christmas")
     && typeof preferences.pendingOnly === "boolean" && typeof preferences.autoFood === "boolean"
     && ["pending", "watched"].includes(preferences.movieTab)
     && ["scheduled", "completed"].includes(preferences.planTab)
@@ -168,6 +172,13 @@ function decodeState(raw) {
     storageWarning("Tus datos guardados tienen un formato no compatible. Se han conservado intactos; los cambios de esta sesi\u00f3n no se guardar\u00e1n.");
     return null;
   }
+  // Migrate only known retired values after validation, preserving the rest of the data.
+  if (parsed.colorMode === undefined) {
+    parsed.colorMode = ["night", "movie", "arcade"].includes(parsed.theme) ? "dark" : "light";
+  }
+  if (LEGACY_THEMES.includes(parsed.theme)) parsed.theme = "movie";
+  parsed.movies = parsed.movies.map(normalizeMovieGenre);
+  if (parsed.preferences.genre === "christmas") parsed.preferences.genre = "all";
   return parsed;
 }
 
@@ -266,14 +277,14 @@ async function fetchCatalogPage(query, genre, page, signal) {
     || !data.results.every((movie) => isTmdbData(movie) && movie.id === `tmdb-${movie.tmdbId}`)) {
     throw new MovieApiError("El cat\u00e1logo devolvi\u00f3 un formato no compatible.");
   }
-  return data;
+  return { ...data, results: data.results.map(normalizeMovieGenre) };
 }
 
 async function fetchMovieDetails(tmdbId, signal) {
   const data = await apiRequest(`/movies/${tmdbId}`, {}, signal);
   if (!isRecord(data) || !isTmdbData(data.movie) || data.movie.tmdbId !== tmdbId
     || data.movie.id !== `tmdb-${tmdbId}`) throw new MovieApiError("No se pudo leer la ficha de esta pel\u00edcula.");
-  return data.movie;
+  return normalizeMovieGenre(data.movie);
 }
 
 function apiErrorMessage(error) {
@@ -310,7 +321,7 @@ function renderCatalog() {
   $("catalog-status").textContent = !configured ? (api.error || "Conecta el proxy TMDB para explorar pel\u00edculas. Consulta el aviso de configuraci\u00f3n.")
     : catalog.loading ? "Buscando pel\u00edculas en TMDB\u2026"
     : catalog.error || (catalog.results.length ? `${catalog.totalResults.toLocaleString("es")} resultados en TMDB.`
-      : catalog.loaded ? "No encontramos pel\u00edculas. Prueba otro t\u00edtulo o universo." : "Busca un t\u00edtulo o descubre pel\u00edculas populares.");
+      : catalog.loaded ? "No encontramos pel\u00edculas. Prueba otro t\u00edtulo o g\u00e9nero." : "Busca un t\u00edtulo o descubre pel\u00edculas populares.");
   $("catalog-retry").hidden = !catalog.error || catalog.loading || !configured;
   const fragment = document.createDocumentFragment();
   catalog.results.forEach((movie) => {
@@ -429,7 +440,7 @@ async function randomApiMovie(signal) {
     const movie = pickRandom(options, null);
     if (movie) return fetchMovieDetails(movie.tmdbId, signal);
   }
-  throw new MovieApiError("No encontramos otra pel\u00edcula en las p\u00e1ginas consultadas. Reintenta, cambia de universo o desactiva Solo pendientes.");
+  throw new MovieApiError("No encontramos otra pel\u00edcula en las p\u00e1ginas consultadas. Reintenta, cambia de g\u00e9nero o desactiva Solo pendientes.");
 }
 
 // Avoid immediate repeats when at least two choices exist; a single choice remains valid.
@@ -447,7 +458,7 @@ function randomMovie(forceFood = false) {
   cancelSelection();
   const movie = pickRandom(candidates(), state.draft.movieId);
   if (!movie) {
-    notify("No hay pel\u00edculas con estos filtros. Cambia de universo, incluye las vistas o a\u00f1ade una nueva.");
+    notify("No hay pel\u00edculas con estos filtros. Cambia de g\u00e9nero, incluye las vistas o a\u00f1ade una nueva.");
     return null;
   }
   state.draft.movieId = movie.id;
@@ -489,7 +500,7 @@ function renderPicker() {
   const count = candidates().length;
   const online = movieSource() === "catalog";
   const busy = Boolean(selectionController);
-  $("movie-badge").textContent = movie ? MOVIE_GENRES[movie.genre].toLocaleUpperCase("es") : "QUE DECIDA EL DESTINO";
+  $("movie-badge").textContent = movie ? MOVIE_GENRES[movie.genre].toLocaleUpperCase("es") : "POR DESCUBRIR";
   $("movie-title").textContent = movie ? movie.title : "Tu pr\u00f3xima favorita te espera.";
   $("movie-meta").textContent = movie
     ? [movie.year ?? "A\u00f1o no disponible", movie.minutes ? `${movie.minutes} min` : "Duraci\u00f3n no disponible",
@@ -549,7 +560,7 @@ function addMovie(event) {
   if (!$("add-movie-form").reportValidity()) return;
   const genre = $("new-movie-genre").value;
   if (!isGenre(genre)) {
-    notify("Elige un universo v\u00e1lido para tu pel\u00edcula.");
+    notify("Elige un g\u00e9nero v\u00e1lido para tu pel\u00edcula.");
     return;
   }
   if (state.movies.some((movie) => normalizedTitle(movie.title) === normalizedTitle(title))) {
@@ -740,8 +751,11 @@ function renderPlans() {
 
 function renderTheme() {
   document.documentElement.dataset.theme = state.theme;
-  $("theme-label").textContent = GENRES[state.theme];
-  $("art-caption").textContent = MOODS[state.theme];
+  document.documentElement.dataset.colorMode = state.colorMode;
+  $("theme-label").textContent = THEMES[state.theme];
+  $("color-mode-label").textContent = COLOR_MODES[state.colorMode];
+  $("color-mode-toggle").setAttribute("aria-pressed", String(state.colorMode === "dark"));
+  $("color-mode-toggle").title = state.colorMode === "dark" ? "Cambiar a modo claro" : "Cambiar a modo oscuro";
   document.querySelectorAll('input[name="theme"]').forEach((input) => { input.checked = input.value === state.theme; });
   document.querySelector('meta[name="theme-color"]').content = getComputedStyle(document.documentElement).getPropertyValue("--page").trim();
 }
@@ -859,7 +873,7 @@ $("show-add-movie").addEventListener("click", () => {
   }
   $("add-movie-form").hidden = false;
   $("show-add-movie").setAttribute("aria-expanded", "true");
-  $("new-movie-genre").value = state.theme;
+  $("new-movie-genre").value = state.preferences.genre === "all" ? "general" : state.preferences.genre;
   $("new-movie-title").focus();
 });
 $("cancel-add-movie").addEventListener("click", closeAddMovie);
@@ -898,6 +912,11 @@ document.querySelectorAll("[data-view]").forEach((button) => {
     renderOrganizer();
   });
 });
+$("color-mode-toggle").addEventListener("click", () => {
+  state.colorMode = state.colorMode === "dark" ? "light" : "dark";
+  persistState();
+  renderTheme();
+});
 $("theme-toggle").addEventListener("click", () => {
   const open = $("theme-menu").hidden;
   $("theme-menu").hidden = !open;
@@ -906,6 +925,10 @@ $("theme-toggle").addEventListener("click", () => {
 });
 $("theme-menu").addEventListener("change", (event) => {
   if (!event.target.matches('input[name="theme"]')) return;
+  if (!Object.hasOwn(THEMES, event.target.value)) {
+    notify("Elige un tema de interfaz v\u00e1lido.");
+    return;
+  }
   state.theme = event.target.value;
   persistState();
   renderTheme();

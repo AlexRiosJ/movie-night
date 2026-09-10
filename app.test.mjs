@@ -6,6 +6,9 @@ import worker from "./proxy/worker.mjs";
 
 const source = readFileSync(new URL("./app.js", import.meta.url), "utf8");
 const html = readFileSync(new URL("./index.html", import.meta.url), "utf8");
+const styles = readFileSync(new URL("./styles.css", import.meta.url), "utf8");
+const themeNames = ["movie", "arcade", "zine"];
+const colorModes = ["light", "dark"];
 const movie = (id = 42, overrides = {}) => ({
   id: `tmdb-${id}`, tmdbId: id, title: `Movie ${id}`, genre: "sci-fi",
   year: 2024, minutes: 123, description: "A movie synopsis.", posterPath: "/poster.jpg",
@@ -42,6 +45,7 @@ class Element {
     return this.nodes.get(selector);
   }
   querySelectorAll() { return []; }
+  matches(selector) { return selector === 'input[name="theme"]' && this.name === "theme"; }
   addEventListener(name, callback) { this.listeners[name] = callback; }
   setAttribute(name, value) { this.attributes[name] = value; }
   removeAttribute(name) { delete this[name]; }
@@ -65,6 +69,13 @@ function app({ raw = null, config = "", fetch = async () => { throw new Error("U
   const document = new Element();
   document.documentElement = new Element();
   document.activeElement = new Element();
+  const themes = [...html.matchAll(/<input type="radio" name="theme" value="([^"]+)"/g)].map((match) => {
+    const input = new Element();
+    input.name = "theme";
+    input.value = match[1];
+    return input;
+  });
+  document.querySelectorAll = (selector) => selector === 'input[name="theme"]' ? themes : [];
   document.getElementById = (id) => {
     assert.ok(nodes.has(id), `Element #${id} must exist in index.html`);
     return nodes.get(id);
@@ -86,7 +97,7 @@ function app({ raw = null, config = "", fetch = async () => { throw new Error("U
   });
   vm.runInContext(source, context);
   return {
-    nodes, storage, context, errors, window,
+    nodes, storage, context, errors, window, document, themes,
     run: (code) => vm.runInContext(code, context),
     set(name, value) { context[name] = value; },
   };
@@ -99,6 +110,227 @@ test("fresh users get no fixed movie list and a clear setup state", () => {
   assert.equal(ui.nodes.get("api-setup-notice").hidden, false);
   assert.equal(ui.nodes.get("catalog-search").disabled, true);
   assert.equal(ui.nodes.get("random-movie").disabled, true);
+});
+
+test("the interface defaults to Movie in light mode and separates style from color mode", () => {
+  const ui = app();
+  assert.equal(ui.run("state.theme"), "movie");
+  assert.equal(ui.run("state.colorMode"), "light");
+  assert.equal(ui.document.documentElement.dataset.theme, "movie");
+  assert.equal(ui.document.documentElement.dataset.colorMode, "light");
+  assert.equal(ui.nodes.get("theme-label").textContent, "Movie");
+  assert.equal(ui.nodes.get("color-mode-label").textContent, "Claro");
+  assert.equal(ui.nodes.get("color-mode-toggle").attributes["aria-pressed"], "false");
+  assert.deepEqual(ui.themes.map((input) => input.value), themeNames);
+  assert.deepEqual(Array.from(ui.run("Object.keys(THEMES)")), themeNames);
+  assert.deepEqual(Array.from(ui.run("Object.keys(COLOR_MODES)")), colorModes);
+  assert.deepEqual(ui.themes.filter((input) => input.checked).map((input) => input.value), ["movie"]);
+  assert.match(html, /<html lang="es" data-theme="movie" data-color-mode="light">/);
+  assert.doesNotMatch(styles, /data-theme="(?:light|night|dark)"/);
+  assert.match(html, /class="movie-illustration"/);
+  assert.doesNotMatch(html, /Spooky season|Cozy|oto&ntilde;o|Navidad|mood-art|Universo|universos/);
+  assert.doesNotMatch(styles, /spooky|cozy|sci-fi|fantasy|christmas/);
+  for (const id of ["movie-genre", "catalog-genre", "new-movie-genre"]) {
+    const options = html.match(new RegExp(`<select id="${id}"[^>]*>([\\s\\S]*?)</select>`))[1];
+    const values = [...options.matchAll(/value="([^"]+)"/g)].map((match) => match[1]);
+    assert.deepEqual(values.filter((value) => value !== "all").sort(),
+      Array.from(ui.run("Object.keys(MOVIE_GENRES)")).sort());
+  }
+});
+
+test("theme changes update controls, persist, and reload without changing movie preferences", () => {
+  const ui = app();
+  ui.set("result", movie());
+  ui.run(`saveApiMovie(result); state.draft.movieId = result.id; state.draft.foodId = "pizza";
+    state.preferences.genre = "fantasy";
+    state.plans.push({ id: "night", movieId: result.id, foodId: "pizza", date: "2026-09-09", place: "Home", completed: true });`);
+  const before = JSON.parse(ui.run("JSON.stringify(state)"));
+  for (const colorMode of colorModes) {
+    if (ui.run("state.colorMode") !== colorMode) ui.nodes.get("color-mode-toggle").listeners.click();
+    for (const input of ui.themes) {
+      ui.nodes.get("theme-menu").listeners.change({ target: input });
+      assert.equal(ui.document.documentElement.dataset.theme, input.value);
+      assert.equal(ui.nodes.get("theme-label").textContent, input.value[0].toUpperCase() + input.value.slice(1));
+      assert.deepEqual(ui.themes.filter((radio) => radio.checked).map((radio) => radio.value), [input.value]);
+      const saved = JSON.parse(ui.storage.get("movie-night:v1"));
+      assert.deepEqual(saved, { ...before, theme: input.value, colorMode });
+      const reloaded = app({ raw: JSON.stringify(saved) });
+      assert.equal(reloaded.document.documentElement.dataset.theme, input.value);
+      assert.equal(reloaded.run("storageWritable"), true);
+      assert.deepEqual(JSON.parse(reloaded.run("JSON.stringify(state)")), saved);
+      const otherTab = app();
+      otherTab.window.listeners.storage({ key: "movie-night:v1", newValue: JSON.stringify(saved) });
+      assert.deepEqual(JSON.parse(otherTab.run("JSON.stringify(state)")), saved);
+      assert.equal(otherTab.nodes.get("theme-label").textContent, ui.nodes.get("theme-label").textContent);
+      assert.deepEqual(otherTab.themes.filter((radio) => radio.checked).map((radio) => radio.value), [input.value]);
+      for (const tab of [ui, reloaded, otherTab]) {
+        assert.equal(tab.document.documentElement.dataset.colorMode, colorMode);
+        assert.equal(tab.nodes.get("color-mode-label").textContent, colorMode === "dark" ? "Oscuro" : "Claro");
+        assert.equal(tab.nodes.get("color-mode-toggle").attributes["aria-pressed"], String(colorMode === "dark"));
+      }
+    }
+  }
+  ui.nodes.get("theme-menu").listeners.change({ target: { value: "spooky", matches: () => true } });
+  assert.equal(ui.run("state.theme"), "zine");
+  assert.match(ui.nodes.get("toast").textContent, /tema de interfaz/);
+});
+
+test("the mode toggle is reversible in every style and never changes the selected theme", () => {
+  const ui = app();
+  for (const input of ui.themes) {
+    ui.nodes.get("theme-menu").listeners.change({ target: input });
+    const before = JSON.parse(ui.run("JSON.stringify(state)"));
+    for (const colorMode of ["dark", "light"]) {
+      ui.nodes.get("color-mode-toggle").listeners.click();
+      assert.deepEqual(JSON.parse(ui.run("JSON.stringify(state)")), { ...before, colorMode });
+      assert.deepEqual(JSON.parse(ui.storage.get("movie-night:v1")), { ...before, colorMode });
+      assert.equal(ui.nodes.get("color-mode-toggle").title, colorMode === "dark" ? "Cambiar a modo claro" : "Cambiar a modo oscuro");
+    }
+  }
+});
+
+test("older appearance settings migrate to a style and mode without altering saved content", () => {
+  const seed = app();
+  seed.set("result", movie());
+  seed.run(`saveApiMovie(result).watched = true; state.draft.movieId = result.id;
+    state.plans.push({ id: "night", movieId: result.id, foodId: "pizza", date: "2026-09-09", place: "Home", completed: true });`);
+  const original = JSON.parse(seed.run("JSON.stringify(state)"));
+  delete original.colorMode;
+  for (const [oldTheme, theme, colorMode] of [
+    ["light", "movie", "light"], ["night", "movie", "dark"],
+    ["movie", "movie", "dark"], ["arcade", "arcade", "dark"], ["zine", "zine", "light"],
+  ]) {
+    const raw = JSON.stringify({ ...original, theme: oldTheme });
+    const ui = app({ raw });
+    const expected = { ...original, theme, colorMode };
+    assert.deepEqual(JSON.parse(ui.run("JSON.stringify(state)")), expected);
+    assert.equal(ui.storage.get("movie-night:v1"), raw);
+    ui.run("persistState()");
+    assert.deepEqual(JSON.parse(ui.storage.get("movie-night:v1")), expected);
+    ui.window.listeners.storage({ key: "movie-night:v1", newValue: raw });
+    assert.deepEqual(JSON.parse(ui.run("JSON.stringify(state)")), expected);
+  }
+});
+
+test("all retired themes migrate without losing collections, watched status, plans, or drafts", () => {
+  const seed = app();
+  seed.set("result", movie(42, { genre: "christmas" }));
+  seed.run(`state.movies.push({ ...result, watched: true, custom: false });
+    state.plans.push({ id: "night", movieId: result.id, foodId: "pizza", date: "2026-09-09", place: "Home", completed: true });
+    state.draft = { movieId: result.id, foodId: "pizza", date: "2026-09-09", place: "Home" };
+    state.preferences.genre = "christmas"`);
+  const original = JSON.parse(seed.run("JSON.stringify(state)"));
+  delete original.colorMode;
+  for (const theme of ["spooky", "cozy", "sci-fi", "fantasy", "christmas"]) {
+    const raw = JSON.stringify({ ...original, theme });
+    const ui = app({ raw });
+    const migrated = JSON.parse(ui.run("JSON.stringify(state)"));
+    assert.deepEqual(migrated, {
+      ...original, theme: "movie", colorMode: "light",
+      movies: original.movies.map((item) => ({ ...item, genre: "general" })),
+      preferences: { ...original.preferences, genre: "all" },
+    });
+    assert.equal(ui.run("isValidState(state)"), true);
+    assert.equal(ui.storage.get("movie-night:v1"), raw);
+    assert.equal(ui.nodes.get("movie-genre").value, "all");
+    assert.equal(ui.nodes.get("movie-badge").textContent, "OTROS G\u00c9NEROS");
+    ui.run("persistState()");
+    const reloaded = app({ raw: ui.storage.get("movie-night:v1") });
+    assert.deepEqual(JSON.parse(reloaded.run("JSON.stringify(state)")), migrated);
+    ui.window.listeners.storage({ key: "movie-night:v1", newValue: raw });
+    assert.deepEqual(JSON.parse(ui.run("JSON.stringify(state)")), migrated);
+  }
+});
+
+test("unknown themes and damaged legacy states remain protected instead of being migrated", () => {
+  const seed = app();
+  const original = JSON.parse(seed.run("JSON.stringify(state)"));
+  for (const data of [
+    { ...original, theme: "unknown" },
+    { ...original, theme: { toString: "light" } },
+    { ...original, theme: "cozy", movies: "broken" },
+    { ...original, colorMode: "unknown" },
+    { ...original, colorMode: null },
+    { ...original, colorMode: { toString: "dark" } },
+  ]) {
+    const raw = JSON.stringify(data);
+    const ui = app({ raw });
+    ui.run("persistState()");
+    assert.equal(ui.storage.get("movie-night:v1"), raw);
+    assert.equal(ui.run("storageWritable"), false);
+    assert.equal(ui.nodes.get("storage-notice").hidden, false);
+  }
+});
+
+test("manual additions default to the movie filter, never the interface theme", () => {
+  for (const theme of themeNames) {
+    for (const genre of ["all", "spooky", "cozy", "sci-fi", "fantasy", "general"]) {
+      const ui = app();
+      ui.set("theme", theme);
+      ui.set("genre", genre);
+      ui.run("state.theme = theme; state.preferences.genre = genre");
+      ui.nodes.get("add-movie-form").hidden = true;
+      ui.nodes.get("show-add-movie").listeners.click();
+      assert.equal(ui.nodes.get("new-movie-genre").value, genre === "all" ? "general" : genre);
+      ui.nodes.get("new-movie-title").value = "My movie";
+      ui.run("addMovie()");
+      assert.equal(ui.run("state.movies.length"), 1);
+      assert.equal(ui.run("isValidState(state)"), true);
+      assert.equal(ui.run("state.theme"), theme);
+    }
+  }
+});
+
+test("retired proxy categories normalize in catalog, details, and saved collection", async () => {
+  const data = movie(42, { genre: "christmas" });
+  const ui = app({ fetch: async (url) => json(url.pathname === "/movies" ? page([data]) : { movie: data }) });
+  ui.run("api.baseUrl = 'https://api.example.com'");
+  await ui.run("loadCatalog()");
+  assert.equal(ui.run("catalog.results[0].genre"), "general");
+  assert.match(ui.nodes.get("catalog-list").children[0].querySelector(".catalog-meta").textContent, /Otros g\u00e9neros/);
+  await ui.run("chooseCatalogMovie(catalog.results[0])");
+  assert.equal(ui.run("state.movies[0].genre"), "general");
+  assert.equal(ui.nodes.get("movie-badge").textContent, "OTROS G\u00c9NEROS");
+  assert.equal(ui.run("isValidState(state)"), true);
+});
+
+test("all palettes keep readable text and buttons in light and dark modes", () => {
+  const colors = (css) => Object.fromEntries([...css.matchAll(/(--[\w-]+):\s*(#[\da-f]{6})/g)]
+    .map((match) => [match[1], match[2]]));
+  const luminance = (hex) => hex.slice(1).match(/../g).map((channel) => {
+    const value = parseInt(channel, 16) / 255;
+    return value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4;
+  }).reduce((sum, value, index) => sum + value * [0.2126, 0.7152, 0.0722][index], 0);
+  const pairs = [
+    ["--ink", "--page"], ["--ink", "--surface"],
+    ["--muted", "--page"], ["--muted", "--surface"], ["--muted", "--border"],
+    ["--accent", "--page"], ["--accent", "--surface"], ["--accent", "--accent-soft"],
+    ["--on-accent", "--accent"], ["--on-accent", "--accent-hover"],
+    ["--secondary-ink", "--page"], ["--secondary-ink", "--surface"], ["#ffffff", "--dark"], ["#ffffff", "--dark-hover"],
+    ["--art-ink", "--art-bg"],
+  ];
+  const themePalette = (theme) => colors(styles.match(new RegExp(`:root\\[data-theme="${theme}"\\]\\s*\\{([^}]+)\\}`))[1]);
+  assert.match(styles, /:root\s*\{\s*color-scheme: light;/);
+  assert.match(styles, /:root\[data-color-mode="dark"\] \{ color-scheme: dark; \}/);
+  for (const theme of themeNames) {
+    for (const colorMode of colorModes) {
+      const overrides = colorMode === "light" ? "" : styles.match(new RegExp(`:root\\[data-theme="${theme}"\\]\\[data-color-mode="dark"\\]\\s*\\{([^}]+)\\}`))[1];
+      const palette = { ...themePalette(theme), ...colors(overrides) };
+      const themePairs = theme === "movie" ? [
+        ...pairs, ["--ticket-ink", "--ticket-bg"], ["--ticket-muted", "--ticket-bg"],
+        ["--ticket-ink", "--ticket-surface"], ["--ticket-muted", "--ticket-surface"],
+        ["--ticket-accent", "--ticket-bg"], ["--ticket-surface", "--ticket-button-hover"],
+        ["--ink", "--screen-top"], ["--muted", "--screen-top"], ["--accent", "--screen-top"],
+        ["--ink", "--screen-bottom"], ["--muted", "--screen-bottom"], ["--accent", "--screen-bottom"],
+      ] : theme === "zine" ? [...pairs, ["--ink", "--art-accent"]] : pairs;
+      for (const [foreground, background] of themePairs) {
+        const values = [foreground, background].map((key) => luminance(palette[key] ?? key)).sort((a, b) => b - a);
+        const contrast = (values[0] + 0.05) / (values[1] + 0.05);
+        assert.ok(contrast >= 4.5, `${theme}/${colorMode}: ${foreground} on ${background} has ${contrast.toFixed(2)} contrast`);
+      }
+    }
+  }
+  assert.match(html, new RegExp(`<meta name="theme-color" content="${themePalette("movie")["--page"]}">`));
 });
 
 test("proxy config accepts HTTPS or loopback HTTP, never URL credentials or query tokens", () => {

@@ -12,8 +12,8 @@ appears in the frontend. Visitors do not need accounts or API keys.
 
 ```text
 movie-night/
-  index.html          Page, forms, templates, and original theme artwork
-  styles.css          Responsive layout and five theme palettes
+  index.html          Page, forms, templates, and original movie artwork
+  styles.css          Three interface styles, each with light and dark palettes
   config.js           Public proxy URL only (never a token)
   app.js              API client, catalog, collection, plans, and localStorage
   app.test.mjs        Frontend behavior tests using Node's built-in test runner
@@ -118,9 +118,27 @@ under a custom domain; update the Worker origin allowlist when changing domains.
 
 ## Using the app
 
+- Choose **Movie**, **Arcade**, or **Zine** with the style selector, then use the
+  adjacent **Claro / Oscuro** button to switch color mode independently.
+  The button uses a sun/moon icon on compact screens. Changing styles keeps your
+  chosen mode; both preferences persist and sync between tabs.
+  New visitors start with **Movie** in light mode.
+- **Movie** has a cinema-inspired presentation:
+  poster typography, a static projector beam, a film countdown illustration,
+  and a perforated ticket for the date and place of your plan.
+  The ticket, artwork, and controls all adapt to the selected mode.
+  Decorative artwork is hidden from
+  assistive technology. No animation, external fonts, or new dependencies are needed.
+- **Arcade** turns the planner into a retro console: mint and lilac accents,
+  a grid background, an original handheld illustration, raised buttons, and a
+  save-point panel for your plan. Scanlines and indicator lights are static.
+- **Zine** is a film-club journal: paper texture, editorial typography,
+  a collage of prints and stickers, ink-style borders, and a notebook-inspired
+  date and place form. Both creative themes retain the same catalog, collection,
+  and plan controls, and neither changes your movie preferences.
 - **Explorar** browses popular movies, searches by title, and pages through
-  results. With an empty title, the universe selector filters discovery.
-  Title searches span all universes and distinguish releases by year.
+  results. With an empty title, the genre selector filters discovery.
+  Title searches span all genres and distinguish releases by year.
 - **Elegir y guardar** loads the complete movie details before selecting it and
   adding it to your collection. Only chosen movies are stored, not every search
   result. Choosing an existing TMDB movie does not duplicate it or reset its
@@ -129,19 +147,20 @@ under a custom domain; update the Worker origin allowlist when changing domains.
   12 principal cast members, directors, genres, original title, and TMDB rating.
   Data is requested in Spanish; translations and some metadata may be missing.
   Missing fields have explicit placeholders, and missing/broken posters use the
-  original theme illustration (or a compact posterless layout on small screens).
+  original cinema illustration (or a compact posterless layout on small screens).
 - **Elegir pelicula aleatoria** uses TMDB by default when configured. It samples
-  different discovery pages, avoids the current movie, and respects your universe
+  different discovery pages, avoids the current movie, and respects your genre
   and watched filter. Discovery includes released movies with at least 50 votes,
   ordered by popularity, within TMDB's 500-page limit. It is not a uniform draw
   from every movie in TMDB. Up to five pages are tried per pick.
 - **Preferencias > Elegir desde > Mi coleccion** keeps the original local-only
   random picker, including custom additions. **Solo pendientes** excludes movies
   marked watched in this browser; it does not mean TMDB knows your viewing history.
-- Universes are approximate discovery filters: horror/mystery for spooky,
-  comedy/romance/family for cozy, science fiction, fantasy, and TMDB's Christmas
-  keyword. Other genres have their own collection category. Themes remain
-  independent of movie filters.
+- Genre groups are approximate discovery filters: horror/mystery,
+  comedy/romance/family, science fiction, fantasy, and other genres. The existing
+  proxy category IDs are retained, so this interface update needs no Worker
+  deployment. Its "other genres" discovery filter still excludes the legacy
+  Christmas keyword; title searches and unfiltered discovery include those movies.
 - **Mis noches** and **Mi coleccion** retain the existing saved plans, manual
   movie form, pending/watched toggles, and exact-movie selection. Only one list
   is shown at a time. Custom titles are limited to 120 characters.
@@ -158,13 +177,23 @@ Failures leave the previous selected movie and saved plans intact. Use
 ## Storage and privacy
 
 Movies (including selected TMDB metadata), watched status, plans, draft fields,
-filters, theme, and active list are stored under `movie-night:v1` in localStorage.
+filters, theme, color mode, and active list are stored under `movie-night:v1` in localStorage.
 Existing collections and plans are preserved; the new catalog does not reset or
 automatically replace them. A legacy entry with the same title and release year
 can receive TMDB details while keeping its ID, watched status, and plan references.
 Custom movies are not guessed or automatically matched to an ambiguous API result.
 
-Collections and plans are not uploaded. Search terms, universe filters, page
+The retired **Light** and **Night** styles become **Movie** in light and dark mode,
+respectively. Older Movie and Arcade selections keep dark mode, and Zine keeps
+light mode, unless a color mode has already been saved. Retired seasonal themes
+become Movie in light mode. Movies, watched status, plans, and drafts are preserved.
+The retired Christmas collection category becomes "Otros
+generos", and a saved Christmas-only picker filter becomes "Todos los generos".
+The same category normalization applies to responses from the existing proxy.
+These updates are saved on the next interaction, as part of the usual state save.
+Unknown or damaged data is still protected rather than silently reset.
+
+Collections and plans are not uploaded. Search terms, genre filters, page
 numbers, and selected TMDB IDs go through the configured Worker to TMDB. Posters
 load directly from TMDB's image CDN, and the attribution logo loads from TMDB.
 These services receive normal network information such as IP addresses. There

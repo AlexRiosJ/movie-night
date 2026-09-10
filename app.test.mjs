@@ -187,8 +187,81 @@ test("broken cast photos retain the name and a stable placeholder across re-rend
   assert.equal(row.querySelector(".cast-name").textContent, "Actor One");
   ui.run("randomFood()");
   const rendered = ui.nodes.get("movie-cast").children[0];
-  assert.equal(rendered.querySelector(".cast-photo").src, undefined);
+  assert.equal(rendered, row);
+  assert.equal(rendered.querySelector(".cast-photo").hidden, true);
   assert.equal(rendered.querySelector(".cast-placeholder").hidden, false);
+});
+
+test("a transient cast photo failure is retried when returning to the movie", () => {
+  const ui = app();
+  ui.set("result", movie());
+  ui.set("other", movie(43));
+  ui.run("saveApiMovie(result); saveApiMovie(other); selectMovie(result.id)");
+  const photo = ui.nodes.get("movie-cast").children[0].querySelector(".cast-photo");
+  photo.listeners.error();
+  ui.run("selectMovie(other.id); selectMovie(result.id)");
+  const retried = ui.nodes.get("movie-cast").children[0].querySelector(".cast-photo");
+  assert.notEqual(retried, photo);
+  assert.equal(retried.hidden, false);
+  assert.equal(retried.src, "https://image.tmdb.org/t/p/w185/actor-one.jpg");
+});
+
+test("enriching the same selected movie updates its cast photos", () => {
+  const ui = app();
+  ui.set("legacy", movie(42, { castProfiles: undefined }));
+  ui.set("result", movie());
+  ui.run("saveApiMovie(legacy); selectMovie(legacy.id)");
+  const oldRow = ui.nodes.get("movie-cast").children[0];
+  assert.equal(oldRow.querySelector(".cast-photo").hidden, true);
+  ui.run("saveApiMovie(result); renderPicker()");
+  const row = ui.nodes.get("movie-cast").children[0];
+  assert.notEqual(row, oldRow);
+  assert.equal(row.querySelector(".cast-photo").hidden, false);
+  assert.equal(row.querySelector(".cast-photo").src, "https://image.tmdb.org/t/p/w185/actor-one.jpg");
+});
+
+test("selection loading uses an in-button spinner without changing visible copy or recreating cast", async () => {
+  const pending = deferred();
+  const ui = app({ fetch: async () => pending.promise });
+  ui.set("existing", movie(41));
+  ui.set("result", movie(42));
+  ui.run("api.baseUrl = 'https://api.example.com'; saveApiMovie(existing); selectMovie(existing.id)");
+  const cast = ui.nodes.get("movie-cast").children;
+  const hint = ui.nodes.get("plan-hint").textContent;
+  const candidateCount = ui.nodes.get("candidate-count").textContent;
+  const selection = ui.run("chooseCatalogMovie(result)");
+  assert.equal(ui.nodes.get("random-movie").attributes["aria-busy"], "true");
+  assert.equal(ui.nodes.get("random-movie").disabled, true);
+  assert.equal(ui.nodes.get("random-movie-spinner").hidden, false);
+  assert.equal(ui.nodes.get("random-movie-icon").hidden, true);
+  assert.equal(ui.nodes.get("picker-status").className, "sr-only");
+  assert.equal(ui.nodes.get("picker-status").hidden, false);
+  assert.match(ui.nodes.get("picker-status").textContent, /Cargando/);
+  assert.equal(ui.nodes.get("plan-hint").textContent, hint);
+  assert.equal(ui.nodes.get("candidate-count").textContent, candidateCount);
+  assert.equal(ui.nodes.get("movie-cast").children, cast);
+  pending.resolve(json({ movie: movie(42) }));
+  await selection;
+  assert.equal(ui.nodes.get("random-movie").attributes["aria-busy"], "false");
+  assert.equal(ui.nodes.get("random-movie-spinner").hidden, true);
+  assert.equal(ui.nodes.get("random-movie-icon").hidden, false);
+  assert.equal(ui.nodes.get("picker-status").hidden, true);
+});
+
+test("cancelling a selection clears the spinner and ignores the late response", async () => {
+  const pending = deferred();
+  const ui = app({ fetch: async () => pending.promise });
+  ui.set("result", movie());
+  ui.run("api.baseUrl = 'https://api.example.com'");
+  const selection = ui.run("chooseCatalogMovie(result)");
+  ui.nodes.get("movie-genre").listeners.change({ target: { value: "cozy" } });
+  assert.equal(ui.nodes.get("random-movie").attributes["aria-busy"], "false");
+  assert.equal(ui.nodes.get("random-movie-spinner").hidden, true);
+  assert.equal(ui.nodes.get("random-movie-icon").hidden, false);
+  assert.equal(ui.nodes.get("picker-status").hidden, true);
+  pending.resolve(json({ movie: movie() }));
+  await selection;
+  assert.equal(ui.run("state.draft.movieId"), null);
 });
 
 test("score handles zero, rounding, a single vote, and manual selections without stale details", () => {
@@ -387,6 +460,11 @@ test("selection failures keep the previous draft and cannot save a plan while lo
   assert.equal(ui.run("state.draft.movieId"), "tmdb-41");
   assert.equal(ui.nodes.get("retry-movie").hidden, false);
   assert.equal(ui.nodes.get("picker-status").textContent, "TMDB unavailable");
+  assert.equal(ui.nodes.get("picker-status").className, "helper");
+  assert.equal(ui.nodes.get("picker-status").hidden, false);
+  assert.equal(ui.nodes.get("random-movie").attributes["aria-busy"], "false");
+  assert.equal(ui.nodes.get("random-movie-spinner").hidden, true);
+  assert.equal(ui.nodes.get("random-movie-icon").hidden, false);
   assert.equal(ui.nodes.get("random-movie").disabled, false);
 });
 

@@ -30,6 +30,7 @@ movie-night/
     d1-fixture.mjs    Shared SQLite adapter for API and browser-session tests
     migrations/
       0001_parties.sql Parties, members, movies, plans, limits, and revisions
+      0002_movie_deletion.sql Movie deletion, dependent nights, and revisions
     wrangler.jsonc    Cloudflare deployment configuration
     .dev.vars.example Local development environment example (no real secrets)
   .nojekyll           Publish static files without Jekyll processing
@@ -130,6 +131,11 @@ From the repository root, after signing in to Cloudflare:
    remote database. Match the local frontend origin as described below. Use a local
    Worker URL in `config.js` for local testing.
 
+For an existing deployment, apply the pending D1 migrations before deploying the
+updated Worker and frontend. Migration `0002_movie_deletion.sql` preserves existing
+movies and nights; future movie deletions atomically remove their associated nights
+and advance the shared revision, even when a movie has no nights.
+
 **Before promoting a public deployment widely, configure production rate limiting
 for `POST /parties` and `POST /parties/join`**, and appropriate limits for reads and
 mutations. Browser origin checks are not an abuse-control or authentication system.
@@ -146,6 +152,9 @@ invitation rotation/revocation, participant removal, or automatic party expiry.
   require `Authorization: Bearer <member token>` for membership in that exact party.
 - `POST /parties/{partyId}/movies` accepts `{movie}`; `PATCH` on
   `/parties/{partyId}/movies/{movieId}` accepts `{watched: boolean}`.
+  `DELETE` on that movie URL is restricted to the member who added it or the
+  party host. It atomically deletes the movie and all its scheduled/completed
+  plans, including plans created by other members.
 - `POST /parties/{partyId}/plans` accepts `{plan}`; `PATCH` on
   `/parties/{partyId}/plans/{planId}` accepts `{completed: boolean}`.
   `DELETE` on the plan URL is restricted to its creator or the party host.
@@ -257,7 +266,12 @@ under a custom domain; update the Worker origin allowlist when changing domains.
 - Create a **party** with a party name and display name, then share its invitation.
   Joining requires a display name, not an account. While a party is active,
   additions, watched status, plans, and their authors are shared. All members may
-  add and toggle entries; only a plan's creator or the host can delete it.
+  add and toggle entries; only a plan's creator or the host can delete it directly.
+- **Coleccion del grupo** shows a trash button for movies you added; the host
+  can delete any movie. The button is available in both pending and watched lists.
+  Confirmation warns that the movie and all its scheduled/completed nights,
+  including other members' nights, will be deleted for the entire group.
+  Cancelling leaves everything intact. The separate personal collection is unaffected.
 - The invitation uses a `#party=TOKEN` URL fragment. **Anyone holding this link
   can join**, read the party, and make member-level changes; only share it with
   people you trust. The fragment is not sent to GitHub Pages in the page request,

@@ -159,7 +159,7 @@ function parseRoute(url) {
     if (collection === "movies") movieId(id);
     else uuid(id);
   }
-  return { kind: collection, partyId, id, methods: id ? (collection === "plans" ? ["PATCH", "DELETE"] : ["PATCH"]) : ["POST"] };
+  return { kind: collection, partyId, id, methods: id ? ["PATCH", "DELETE"] : ["POST"] };
 }
 
 function snapshotStatements(db, partyId) {
@@ -235,8 +235,10 @@ async function mutate(request, db, route, member) {
   let deleting = false;
   if (request.method === "DELETE") {
     deleting = true;
-    statements.push(db.prepare("SELECT created_by FROM party_plans WHERE party_id = ? AND id = ?").bind(partyId, id));
-    statements.push(db.prepare("DELETE FROM party_plans WHERE party_id = ? AND id = ? AND (created_by = ? OR ? = 'host')")
+    const table = kind === "movies" ? "party_movies" : "party_plans";
+    const author = kind === "movies" ? "added_by" : "created_by";
+    statements.push(db.prepare(`SELECT ${author} AS author_id FROM ${table} WHERE party_id = ? AND id = ?`).bind(partyId, id));
+    statements.push(db.prepare(`DELETE FROM ${table} WHERE party_id = ? AND id = ? AND (${author} = ? OR ? = 'host')`)
       .bind(partyId, id, member.id, member.role));
   } else {
     const body = await readBody(request);
@@ -279,10 +281,12 @@ async function mutate(request, db, route, member) {
   // D1 batch is a transaction: row changes, revision triggers and every snapshot query share one commit.
   const results = await db.batch([...statements, ...snapshotStatements(db, partyId)]);
   if (deleting) {
-    const plan = results[0].results[0];
-    if (!plan) throw new PartyError(404, "No se encontr\u00f3 el plan.");
-    if (plan.created_by !== member.id && member.role !== "host") {
-      throw new PartyError(403, "Solo quien cre\u00f3 el plan o el anfitri\u00f3n puede eliminarlo.");
+    const entry = results[0].results[0];
+    if (!entry) throw new PartyError(404, kind === "movies" ? "No se encontr\u00f3 la pel\u00edcula." : "No se encontr\u00f3 el plan.");
+    if (entry.author_id !== member.id && member.role !== "host") {
+      throw new PartyError(403, kind === "movies"
+        ? "Solo quien a\u00f1adi\u00f3 la pel\u00edcula o el anfitri\u00f3n puede eliminarla."
+        : "Solo quien cre\u00f3 el plan o el anfitri\u00f3n puede eliminarlo.");
     }
   } else if (checkIndex !== null) {
     const found = request.method === "POST" ? results[checkIndex].results.length : results[checkIndex].meta.changes;

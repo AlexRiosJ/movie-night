@@ -667,6 +667,26 @@ async function toggleWatched(id) {
   notify(watched ? `"${movie.title}" pasa a ya vistas.` : `"${movie.title}" vuelve a pendientes.`);
 }
 
+async function deleteMovie(id) {
+  if (sharedBusy()) { notify("Espera a que termine la operaci\u00f3n de la party."); return; }
+  const movie = movieById(id);
+  if (!movie) {
+    notify("No se encontr\u00f3 la pel\u00edcula que quieres eliminar.");
+    return;
+  }
+  if (!canDeletePartyEntry(movie.addedBy)) {
+    notify("Solo quien a\u00f1adi\u00f3 la pel\u00edcula o el anfitri\u00f3n puede eliminarla de la colecci\u00f3n del grupo.");
+    return;
+  }
+  if (!window.confirm(`\u00bfEliminar "${movie.title}" de la colecci\u00f3n del grupo? Tambi\u00e9n se eliminar\u00e1n todas sus noches programadas y completadas, incluidas las creadas por otros miembros. Este cambio afecta a todo el grupo y no se puede deshacer.`)) return;
+  const index = [...$("movie-list").children].findIndex((row) => row.contains(document.activeElement));
+  cancelSelection();
+  if (!await writeParty(`/movies/${encodeURIComponent(id)}`, "DELETE")) return;
+  persistState();
+  focusAfterRemoval("movie-list", ".delete-movie", Math.max(0, index), `[data-movie-tab="${state.preferences.movieTab}"]`);
+  notify(`"${movie.title}" y sus noches asociadas se eliminaron de la colecci\u00f3n del grupo.`);
+}
+
 function renderMovies() {
   const watched = state.movies.filter((movie) => movie.watched).length;
   $("collection-total").textContent = state.movies.length;
@@ -693,6 +713,11 @@ function renderMovies() {
     const choose = row.querySelector(".choose-movie");
     choose.dataset.id = movie.id;
     choose.setAttribute("aria-label", `Elegir ${movie.title} para mi plan`);
+    const remove = row.querySelector(".delete-movie");
+    remove.dataset.id = movie.id;
+    remove.setAttribute("aria-label", `Eliminar ${movie.title} de la colecci\u00f3n del grupo`);
+    remove.hidden = !canDeletePartyEntry(movie.addedBy);
+    remove.disabled = sharedBusy();
     fragment.append(row);
   });
   $("movie-list").replaceChildren(fragment);
@@ -824,8 +849,7 @@ function renderPlans() {
     const remove = row.querySelector(".delete-plan");
     remove.dataset.id = plan.id;
     remove.setAttribute("aria-label", `Eliminar el plan de ${movie.title}`);
-    remove.hidden = Boolean(party.session && plan.createdBy !== party.session.memberId
-      && !party.snapshot?.members.some((member) => member.id === party.session.memberId && member.role === "host"));
+    remove.hidden = Boolean(party.session && !canDeletePartyEntry(plan.createdBy));
     fragment.append(row);
   });
   $("plan-list").replaceChildren(fragment);
@@ -966,8 +990,10 @@ $("add-movie-form").addEventListener("submit", addMovie);
 $("movie-list").addEventListener("click", (event) => {
   const watch = event.target.closest(".watch-toggle");
   const choose = event.target.closest(".choose-movie");
+  const remove = event.target.closest(".delete-movie");
   if (watch) toggleWatched(watch.dataset.id);
   if (choose) selectMovie(choose.dataset.id);
+  if (remove) deleteMovie(remove.dataset.id);
 });
 $("plan-list").addEventListener("click", (event) => {
   const toggle = event.target.closest(".complete-plan");

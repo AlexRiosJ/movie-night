@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash, randomUUID } from "node:crypto";
+import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import worker from "./worker.mjs";
 import { D1Database } from "./d1-fixture.mjs";
@@ -119,6 +120,7 @@ test("every private route checks bearer membership in the exact party; invitatio
   const endpoints = [
     ["", "GET", undefined], ["/movies", "POST", { movie: custom() }],
     [`/movies/${movie.id}`, "PATCH", { watched: true }],
+    [`/movies/${movie.id}`, "DELETE", undefined],
     ["/plans", "POST", { plan: plan(movie.id) }],
     [`/plans/${value.id}`, "PATCH", { completed: true }], [`/plans/${value.id}`, "DELETE", undefined],
   ];
@@ -177,6 +179,90 @@ test("movies retain original attribution/content and watched status on retries; 
   const conflictingRetry = await addMovie(db, member, { ...own, title: "Otra pel\u00edcula" });
   assert.equal(conflictingRetry.movies[1].title, "\uff30\uff25\uff2c\uff29 bonita");
   assert.equal(conflictingRetry.movies[1].addedBy, host.memberId);
+});
+
+test("movie author or host can delete a movie and all its nights without affecting other movies or parties", async (t) => {
+  const db = database(t);
+  const host = (await create(db)).session;
+  const author = (await join(db, host.inviteToken, "Autora")).session;
+  const member = (await join(db, host.inviteToken, "Otro")).session;
+  const otherParty = (await create(db, "Otra party")).session;
+  const kept = custom({ title: "Conservar" });
+  await addMovie(db, host, kept);
+  const keptPlan = plan(kept.id);
+  await addPlan(db, member, keptPlan);
+
+  for (const [deletingMember, movie] of [[author, custom()], [host, tmdb()]]) {
+    await addMovie(db, author, movie);
+    const scheduled = plan(movie.id);
+    const completed = plan(movie.id, { foodId: "pasta" });
+    await addPlan(db, host, scheduled);
+    await addPlan(db, member, completed);
+    const before = (await send(db, member, `/plans/${completed.id}`, { method: "PATCH", body: { completed: true } })).data;
+    await addMovie(db, otherParty, movie);
+    const otherBefore = await addPlan(db, otherParty, scheduled);
+
+    const denied = await send(db, member, `/movies/${movie.id}`, { method: "DELETE", body: { role: "host", addedBy: member.memberId } });
+    assert.equal(denied.status, 403);
+    assert.match(denied.data.error, /anfitri\u00f3n/);
+    assert.deepEqual((await send(db, host)).data, before);
+
+    const removed = await send(db, deletingMember, `/movies/${movie.id}`, { method: "DELETE" });
+    assert.equal(removed.status, 200, JSON.stringify(removed.data));
+    assert.deepEqual(removed.data.movies, before.movies.filter((item) => item.id !== movie.id));
+    assert.deepEqual(removed.data.plans, before.plans.filter((item) => item.movieId !== movie.id));
+    assert.equal(removed.data.plans[0].id, keptPlan.id);
+    assert.equal(removed.data.revision, before.revision + 3);
+    assert.deepEqual((await send(db, member)).data, removed.data);
+    assert.deepEqual((await send(db, otherParty)).data, otherBefore);
+    assert.equal((await send(db, deletingMember, `/movies/${movie.id}`, { method: "DELETE" })).status, 404);
+    assert.deepEqual((await send(db, host)).data, removed.data);
+
+    const readded = await addMovie(db, author, movie);
+    assert.equal(readded.movies.find((item) => item.id === movie.id).watched, false);
+    assert.equal(readded.plans.length, 1);
+    const withoutNights = await send(db, author, `/movies/${movie.id}`, { method: "DELETE" });
+    assert.equal(withoutNights.status, 200);
+    assert.equal(withoutNights.data.revision, readded.revision + 1);
+  }
+  assert.equal(db.sqlite.prepare("PRAGMA foreign_key_check").all().length, 0);
+  assert.equal((await send(db, host, `/movies/${randomUUID()}`, { method: "DELETE" })).status, 404);
+  assert.equal((await send(db, host, "/movies/tmdb-0", { method: "DELETE" })).status, 400);
+  assert.equal((await send(db, host, "/movies", { method: "DELETE" })).status, 405);
+});
+
+test("movie deletion and every dependent night roll back together if the database fails", async (t) => {
+  const db = database(t);
+  const logged = t.mock.method(console, "error", () => {});
+  const host = (await create(db)).session;
+  const movie = custom();
+  await addMovie(db, host, movie);
+  await addPlan(db, host, plan(movie.id));
+  const before = await addPlan(db, host, plan(movie.id, { foodId: "pasta" }));
+  db.sqlite.exec(`CREATE TRIGGER test_reject_movie_delete AFTER DELETE ON party_movies
+    BEGIN SELECT RAISE(ABORT, 'private_delete_failure'); END;`);
+  const result = await send(db, host, `/movies/${movie.id}`, { method: "DELETE" });
+  assert.equal(result.status, 500);
+  assert.equal(JSON.stringify(result.data).includes("private_delete_failure"), false);
+  assert.equal(logged.mock.calls.length, 1);
+  assert.deepEqual((await send(db, host)).data, before);
+  assert.equal(db.sqlite.prepare("PRAGMA foreign_key_check").all().length, 0);
+});
+
+test("movie deletion migration preserves an existing party and enables removal of its saved nights", async (t) => {
+  const db = database(t, false);
+  db.sqlite.exec(readFileSync(new URL("./migrations/0001_parties.sql", import.meta.url), "utf8"));
+  const host = (await create(db)).session;
+  const movie = custom();
+  await addMovie(db, host, movie);
+  const before = await addPlan(db, host, plan(movie.id));
+  db.sqlite.exec(readFileSync(new URL("./migrations/0002_movie_deletion.sql", import.meta.url), "utf8"));
+  assert.deepEqual((await send(db, host)).data, before);
+  const deleted = await send(db, host, `/movies/${movie.id}`, { method: "DELETE" });
+  assert.equal(deleted.status, 200);
+  assert.deepEqual(deleted.data.movies, []);
+  assert.deepEqual(deleted.data.plans, []);
+  assert.equal(deleted.data.revision, before.revision + 2);
 });
 
 test("simultaneous additions preserve distinct rows and consistent monotonic snapshots, including TMDB conflicts", async (t) => {
@@ -405,6 +491,11 @@ test("party CORS allows private methods/headers without changing catalog GET-onl
     assert.equal(preflight.headers.get("Access-Control-Allow-Headers"), "Accept, Authorization, Content-Type");
     assert.equal(preflight.headers.get("Cache-Control"), "no-store");
   }
+  const moviePreflight = await api(undefined, path(host, "/movies/tmdb-42"), {
+    method: "OPTIONS", headers: { "Access-Control-Request-Method": "DELETE", "Access-Control-Request-Headers": "authorization" },
+  });
+  assert.equal(moviePreflight.status, 204);
+  assert.equal(moviePreflight.headers.get("Access-Control-Allow-Methods"), "GET, POST, PATCH, DELETE, OPTIONS");
   for (const origin of ["null", "https://evil.example", `${ORIGIN}.evil.example`]) {
     const denied = await send(db, host, "", { headers: { Origin: origin } });
     assert.equal(denied.status, 403);

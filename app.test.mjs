@@ -636,6 +636,168 @@ test("custom additions use shared storage and record server-supplied authors", a
   assert.equal(ui.run("isValidState(state)"), true);
 });
 
+test("movie delete controls are limited to the author or host in both group lists, never the personal list", () => {
+  const other = "00000000-0000-4000-8000-000000000004";
+  for (const watched of [false, true]) {
+    const ui = app();
+    ui.set("personal", movie());
+    ui.run("saveApiMovie(personal); renderMovies()");
+    assert.equal(ui.nodes.get("movie-list").children[0].querySelector(".delete-movie").hidden, true);
+    const data = snapshot({ movies: [sharedMovie(42, { watched }), sharedMovie(43, { watched, addedBy: other, addedByName: "Sam" })],
+      members: [{ id: other, name: "Sam", role: "host" }] });
+    data.members[0].role = "member";
+    enterParty(ui, data);
+    ui.set("tab", watched ? "watched" : "pending");
+    ui.run("state.preferences.movieTab = tab; renderMovies()");
+    const buttons = () => ui.nodes.get("movie-list").children.map((row) => row.querySelector(".delete-movie"));
+    assert.deepEqual(buttons().map((button) => button.hidden), [false, true]);
+    assert.equal(buttons()[0].dataset.id, "tmdb-42");
+    assert.match(buttons()[0].attributes["aria-label"], /Eliminar Movie 42.*grupo/);
+    ui.run("party.snapshot.members[0].role = 'host'; renderMovies()");
+    assert.deepEqual(buttons().map((button) => button.hidden), [false, false]);
+    ui.run("party.writing = true; renderMovies()");
+    assert.equal(buttons().every((button) => button.disabled), true);
+    ui.run("party.writing = false; leaveParty()");
+    assert.equal(buttons()[0].hidden, true);
+  }
+  assert.match(html, /class="icon-button delete-movie"[^>]*hidden/);
+});
+
+test("movie deletion warns about all shared nights and cancellation preserves the collection and draft", async () => {
+  const ui = app();
+  enterParty(ui, snapshot({ movies: [sharedMovie()], plans: [sharedPlan()] }));
+  ui.run("selectMovie('tmdb-42')");
+  const before = ui.run("JSON.stringify(state)");
+  const prompts = [];
+  ui.window.confirm = (message) => { prompts.push(message); return false; };
+  await ui.run("deleteMovie('tmdb-42')");
+  assert.equal(prompts.length, 1);
+  assert.match(prompts[0], /Movie 42/);
+  assert.match(prompts[0], /noches programadas y completadas/);
+  assert.match(prompts[0], /otros miembros/);
+  assert.match(prompts[0], /no se puede deshacer/);
+  assert.equal(ui.run("JSON.stringify(state)"), before);
+  assert.equal(ui.run("party.writing"), false);
+  assert.equal(ui.errors.length, 0);
+});
+
+test("movie deletion clears its selected draft and shared nights while preserving personal data", async () => {
+  const calls = [];
+  const ui = app({ fetch: async (url, options) => {
+    calls.push({ url, options });
+    return json(snapshot({ revision: 3 }));
+  } });
+  ui.set("personal", movie());
+  ui.run("saveApiMovie(personal); selectMovie(personal.id)");
+  const personal = ui.storage.get("movie-night:v1");
+  enterParty(ui, snapshot({ movies: [sharedMovie(42, { watched: true })], plans: [
+    sharedPlan(), sharedPlan({ id: "00000000-0000-4000-8000-000000000005", completed: true }),
+  ] }));
+  ui.run("selectMovie('tmdb-42'); state.preferences.movieTab = 'watched'; renderMovies()");
+  const row = ui.nodes.get("movie-list").children[0];
+  const remove = row.querySelector(".delete-movie");
+  ui.set("focused", remove);
+  ui.run("document.activeElement = focused");
+  row.contains = (element) => element === remove;
+  ui.set("didFocus", false);
+  ui.run("document.querySelector('[data-movie-tab=\"watched\"]').focus = () => { didFocus = true; }");
+  await ui.run("deleteMovie('tmdb-42')");
+  assert.equal(ui.run("didFocus"), true);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].url.pathname, `/parties/${sharedSession().partyId}/movies/tmdb-42`);
+  assert.equal(calls[0].options.method, "DELETE");
+  assert.equal(calls[0].options.body, undefined);
+  assert.equal(ui.run("state.movies.length"), 0);
+  assert.equal(ui.run("state.plans.length"), 0);
+  assert.equal(ui.run("state.draft.movieId"), null);
+  assert.equal(ui.nodes.get("collection-total").textContent, 0);
+  assert.equal(ui.nodes.get("nights-total").textContent, 0);
+  assert.equal(ui.nodes.get("movie-empty").hidden, false);
+  assert.equal(ui.nodes.get("save-plan").disabled, true);
+  assert.match(ui.nodes.get("toast").textContent, /noches asociadas se eliminaron/);
+  const view = JSON.parse(ui.storage.get(`movie-night:party-view:${sharedSession().partyId}`));
+  assert.equal(view.draft.movieId, null);
+  assert.equal(ui.storage.get("movie-night:v1"), personal);
+  ui.run("leaveParty()");
+  assert.equal(ui.run("state.movies[0].id"), "tmdb-42");
+  assert.equal(ui.run("state.draft.movieId"), "tmdb-42");
+});
+
+test("failed movie deletions keep the list and selection, disable controls and prevent double submits", async () => {
+  const pending = deferred();
+  let writes = 0;
+  const ui = app({ fetch: async () => { writes += 1; return pending.promise; } });
+  enterParty(ui, snapshot({ movies: [sharedMovie()], plans: [sharedPlan()] }));
+  ui.run("selectMovie('tmdb-42')");
+  const before = ui.run("JSON.stringify(state)");
+  const remove = ui.nodes.get("movie-list").children[0].querySelector(".delete-movie");
+  ui.set("deleteButtons", [remove]);
+  ui.run("document.querySelectorAll = (selector) => selector.includes('.delete-movie') ? deleteButtons : []");
+  const deletion = ui.run("deleteMovie('tmdb-42')");
+  assert.equal(remove.disabled, true);
+  await ui.run("deleteMovie('tmdb-42')");
+  assert.equal(writes, 1);
+  assert.equal(ui.run("JSON.stringify(state)"), before);
+  pending.resolve(json({ error: "Database unavailable" }, 503));
+  await deletion;
+  assert.equal(ui.run("JSON.stringify(state)"), before);
+  assert.equal(remove.disabled, false);
+  assert.equal(ui.nodes.get("party-status").textContent, "Database unavailable");
+  assert.equal(ui.run("party.writing"), false);
+});
+
+test("missing or unauthorized movie deletions never request confirmation or mutate the collection", async () => {
+  const other = "00000000-0000-4000-8000-000000000004";
+  const ui = app();
+  const data = snapshot({ movies: [sharedMovie(42, { addedBy: other, addedByName: "Sam" })],
+    members: [{ id: other, name: "Sam", role: "host" }] });
+  data.members[0].role = "member";
+  enterParty(ui, data);
+  ui.window.confirm = () => assert.fail("Only authorized, existing movies can be deleted");
+  await ui.run("deleteMovie('tmdb-42')");
+  assert.match(ui.nodes.get("toast").textContent, /anfitri\u00f3n/);
+  await ui.run("deleteMovie('tmdb-99')");
+  assert.match(ui.nodes.get("toast").textContent, /No se encontr\u00f3/);
+  assert.equal(ui.run("state.movies.length"), 1);
+  assert.equal(ui.errors.length, 0);
+});
+
+test("older polls and in-flight catalog selections cannot restore a movie after its deletion", async () => {
+  const poll = deferred();
+  const details = deferred();
+  let writes = 0;
+  const ui = app({ fetch: async (url, options) => {
+    if (options.method === "DELETE") { writes += 1; return json(snapshot({ revision: 3 })); }
+    if (url.pathname === "/movies/42") return details.promise;
+    assert.equal(options.method, "GET");
+    return poll.promise;
+  } });
+  enterParty(ui, snapshot({ revision: 1, movies: [sharedMovie()] }));
+  ui.set("choice", movie());
+  const selection = ui.run("chooseCatalogMovie(choice)");
+  const refresh = ui.run("refreshParty()");
+  await ui.run("deleteMovie('tmdb-42')");
+  poll.resolve(json(snapshot({ revision: 2, movies: [sharedMovie()] })));
+  details.resolve(json({ movie: movie() }));
+  await Promise.all([selection, refresh]);
+  assert.equal(writes, 1);
+  assert.equal(ui.run("party.revision"), 3);
+  assert.equal(ui.run("state.movies.length"), 0);
+  assert.equal(ui.run("selectionController"), null);
+});
+
+test("movie list clicks delegate the delete button and its nested icon to movie deletion", () => {
+  const ui = app();
+  enterParty(ui, snapshot({ movies: [sharedMovie()] }));
+  const remove = ui.nodes.get("movie-list").children[0].querySelector(".delete-movie");
+  ui.set("deletedId", null);
+  ui.run("deleteMovie = (id) => { deletedId = id; }");
+  ui.nodes.get("movie-list").listeners.click({
+    target: { closest: (selector) => selector === ".delete-movie" ? remove : null },
+  });
+  assert.equal(ui.run("deletedId"), "tmdb-42");
+});
+
 test("shared plan operations use separate endpoints and preserve personal draft fields on polling", async () => {
   const calls = [];
   let current = snapshot({ movies: [sharedMovie()] });
@@ -882,4 +1044,19 @@ test("two independent browser sessions share attributed movies and plans through
   assert.equal(reloaded.run("party.session.memberId"), guest.run("party.session.memberId"));
   assert.equal(reloaded.run("state.plans.length"), 1);
   assert.equal(db.sqlite.prepare("SELECT count(*) AS count FROM party_members").get().count, 2);
+
+  host.set("deletedMovieId", guest.run("state.plans[0].movieId"));
+  await host.run("deleteMovie(deletedMovieId)");
+  assert.equal(host.run("party.error"), "");
+  await Promise.all([guest.run("refreshParty()"), reloaded.run("refreshParty()")]);
+  for (const client of [host, guest, reloaded]) {
+    assert.equal(client.run("state.movies.length"), 1);
+    assert.equal(client.run("state.plans.length"), 0);
+    assert.equal(client.run("state.draft.movieId"), null);
+    assert.equal(client.run("isValidState(state)"), true);
+  }
+  const restored = app({ fetch, config: "https://api.example.com", partyRaw: stored });
+  await restored.run("partyReady");
+  assert.equal(restored.run("state.movies.length"), 1);
+  assert.equal(restored.run("state.plans.length"), 0);
 });

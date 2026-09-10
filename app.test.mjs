@@ -246,9 +246,30 @@ test("app language is a single global option inside Preferences rather than a ca
   assert.doesNotMatch(catalog, /id="catalog-language"/);
   assert.doesNotMatch(html, /No cambia el idioma de los men/);
   const header = html.match(/<header class="site-header[\s\S]*?<\/header>/)[0];
-  assert.match(header, /class="appearance-controls"[\s\S]*id="color-mode-toggle"[\s\S]*id="theme-toggle"[\s\S]*id="picker-options"/);
+  assert.match(header, /class="appearance-controls"[\s\S]*id="theme-toggle"[\s\S]*id="picker-options"/);
+  assert.match(preferences, /id="color-mode-toggle"/);
+  assert.equal([...html.matchAll(/id="color-mode-toggle"/g)].length, 1);
+  assert.doesNotMatch(styles, /#color-mode-label\s*\{\s*display:\s*none/);
   const planner = html.match(/<section id="planner"[\s\S]*?<\/section>/)[0];
   assert.doesNotMatch(planner, /id="picker-options"/);
+});
+
+test("search sits above the planner and opens Explore from another list", async () => {
+  assert.ok(html.indexOf('id="catalog-form"') < html.indexOf('id="planner"'));
+  assert.equal([...html.matchAll(/id="catalog-form"/g)].length, 1);
+  const requests = [];
+  const ui = app({ fetch: async (url) => { requests.push(url); return json(page([movie()])); } });
+  ui.run("api.baseUrl = 'https://api.example.com'; state.preferences.view = 'movies'; renderOrganizer()");
+  ui.nodes.get("catalog-query").value = "Movie";
+  ui.nodes.get("catalog-genre").value = "all";
+  ui.nodes.get("catalog-form").listeners.submit({ preventDefault() {} });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(ui.run("state.preferences.view"), "catalog");
+  assert.equal(ui.nodes.get("catalog").hidden, false);
+  assert.equal(ui.nodes.get("collection").hidden, true);
+  assert.equal(requests.length, 1);
+  assert.equal(requests[0].searchParams.get("query"), "Movie");
+  assert.equal(ui.nodes.get("catalog-list").children.length, 1);
 });
 
 test("English planner, food, dates and confirmation copy preserve manual content and unfinished forms", async () => {
@@ -406,7 +427,8 @@ test("English search, pagination and random selection render localized titles an
   await ui.run("randomMovie()");
   assert.equal(ui.nodes.get("movie-title").textContent, "English title");
   assert.equal(ui.nodes.get("movie-poster").src, "https://image.tmdb.org/t/p/w500/english.jpg");
-  assert.equal(ui.run("state.movies[0].language"), "en-US");
+  assert.equal(ui.run("previewMovie.language"), "en-US");
+  assert.equal(ui.run("state.movies.length"), 0);
   assert.equal(ui.run("isValidState(state)"), true);
   assert.ok(upstream.some((url) => url.pathname === "/3/search/movie"));
   assert.ok(upstream.some((url) => url.pathname === "/3/discover/movie"));
@@ -1143,16 +1165,97 @@ test("random catalog picks sample pages beyond the first and exclude watched/cur
     saveApiMovie(watched).watched = true; saveApiMovie(current);
     state.draft.movieId = current.id;`);
   await ui.run("randomMovie()");
-  assert.equal(ui.run("state.draft.movieId"), "tmdb-43");
+  assert.equal(ui.run("previewMovie.id"), "tmdb-43");
+  assert.equal(ui.run("state.draft.movieId"), null);
+  assert.equal(ui.run("state.movies.length"), 2);
   assert.ok(requests.some((url) => url.includes("page=2")));
   assert.equal(ui.run("state.movies.find(movie => movie.tmdbId === 41).watched"), true);
   assert.equal(ui.run("isValidState(state)"), true);
 });
 
-test("a random pick with no prior selection accepts a new catalog result", async () => {
+test("random results stay out of storage until explicitly added, preserving food and enabling plans", async () => {
   const ui = app({ fetch: async (url) => json(url.pathname === "/movies" ? page([movie()]) : { movie: movie() }) });
   ui.run("api.baseUrl = 'https://api.example.com'");
+  await ui.nodes.get("random-movie").listeners.click();
+  assert.equal(ui.nodes.get("movie-title").textContent, "Movie 42");
+  assert.equal(ui.run("previewMovie.id"), "tmdb-42");
+  assert.equal(ui.run("state.draft.movieId"), null);
+  assert.equal(ui.run("state.movies.length"), 0);
+  assert.equal(JSON.parse(ui.storage.get("movie-night:v1")).movies.length, 0);
+  assert.equal(ui.nodes.get("save-plan").disabled, true);
+  assert.equal(ui.nodes.get("add-selected-movie").disabled, false);
+  await ui.run("savePlan()");
+  assert.equal(ui.run("state.plans.length"), 0);
+  ui.run("state.draft.foodId = 'pizza'");
+  await ui.nodes.get("add-selected-movie").listeners.click();
+  assert.equal(ui.run("previewMovie"), null);
+  assert.equal(ui.run("state.draft.movieId"), "tmdb-42");
+  assert.equal(ui.run("state.draft.foodId"), "pizza");
+  assert.equal(ui.run("state.movies.length"), 1);
+  assert.equal(JSON.parse(ui.storage.get("movie-night:v1")).movies.length, 1);
+  assert.equal(ui.nodes.get("add-selected-movie").disabled, true);
+  assert.equal(ui.nodes.get("save-plan").disabled, false);
+  await ui.run("addPreviewMovie()");
+  assert.equal(ui.run("state.movies.length"), 1);
+  ui.nodes.get("plan-date").value = "2026-09-10";
+  ui.nodes.get("plan-place").value = "Home";
+  await ui.run("savePlan()");
+  assert.equal(ui.run("state.plans.length"), 1);
+  assert.equal(ui.run("isValidState(state)"), true);
+});
+
+test("successive previews avoid repeats and failures preserve the last preview for adding", async () => {
+  let fail = false;
+  const ui = app({ fetch: async (url) => {
+    if (fail) return json({ error: "Unavailable" }, 503);
+    return json(url.pathname === "/movies" ? page([movie(42), movie(43)]) : { movie: movie(Number(url.pathname.split("/").pop())) });
+  } });
+  ui.run("api.baseUrl = 'https://api.example.com'; Math.random = () => 0");
   await ui.run("randomMovie()");
+  assert.equal(ui.run("previewMovie.id"), "tmdb-42");
+  await ui.run("randomMovie()");
+  assert.equal(ui.run("previewMovie.id"), "tmdb-43");
+  fail = true;
+  await ui.run("randomMovie()");
+  assert.equal(ui.run("previewMovie.id"), "tmdb-43");
+  assert.equal(ui.run("state.movies.length"), 0);
+  assert.equal(ui.nodes.get("retry-movie").hidden, false);
+  await ui.run("addPreviewMovie()");
+  assert.equal(ui.run("state.movies.length"), 1);
+  assert.equal(ui.run("state.draft.movieId"), "tmdb-43");
+});
+
+test("preview language refresh never saves a movie and explicit add retains its translated metadata", async () => {
+  const ui = app({ fetch: async (url) => {
+    const language = url.searchParams.get("language");
+    const localized = movie(42, { language, title: language === "en-US" ? "English preview" : "Vista previa" });
+    return json(url.pathname === "/movies" ? page([localized]) : { movie: localized });
+  } });
+  ui.run("api.baseUrl = 'https://api.example.com'");
+  await ui.run("randomMovie()");
+  await ui.run("changeCatalogLanguage('en-US')");
+  assert.equal(ui.nodes.get("movie-title").textContent, "English preview");
+  assert.equal(ui.run("state.movies.length"), 0);
+  assert.equal(ui.nodes.get("add-selected-movie").textContent, "Add to my collection");
+  await ui.run("addPreviewMovie()");
+  assert.equal(ui.run("state.movies[0].title"), "English preview");
+  assert.equal(ui.run("state.movies[0].language"), "en-US");
+});
+
+test("random previews of saved movies retain watched status and do not duplicate the collection", async () => {
+  const ui = app({ fetch: async (url) => json(url.pathname === "/movies" ? page([movie()]) : { movie: movie() }) });
+  ui.set("saved", movie());
+  ui.run("api.baseUrl = 'https://api.example.com'; saveApiMovie(saved).watched = true; state.preferences.pendingOnly = false");
+  await ui.run("randomMovie()");
+  assert.equal(ui.run("state.movies.length"), 1);
+  assert.equal(ui.run("state.movies[0].watched"), true);
+  assert.equal(ui.nodes.get("add-selected-movie").disabled, true);
+  assert.equal(ui.nodes.get("save-plan").disabled, false);
+  await ui.run("toggleWatched('tmdb-42')");
+  assert.doesNotMatch(ui.nodes.get("movie-meta").textContent, /Ya vista/);
+  ui.run("state.preferences.source = 'collection'");
+  await ui.run("randomMovie()");
+  assert.equal(ui.run("previewMovie"), null);
   assert.equal(ui.run("state.draft.movieId"), "tmdb-42");
 });
 
@@ -1267,6 +1370,67 @@ function enterParty(ui, data = snapshot()) {
   ui.set("snapshot", data);
   ui.run("api.baseUrl = session.apiBaseUrl; catalog.loaded = true; activateParty(session, snapshot)");
 }
+
+test("party random previews do not write until Add, and failed adds can be retried without losing the preview", async () => {
+  const writes = [];
+  let fail = true;
+  const pending = deferred();
+  const ui = app({ fetch: async (url, options) => {
+    if (options.method === "POST") {
+      writes.push(JSON.parse(options.body));
+      return fail ? json({ error: "Unavailable" }, 503) : pending.promise;
+    }
+    return json(url.pathname === "/movies" ? page([movie()]) : { movie: movie() });
+  } });
+  enterParty(ui);
+  await ui.run("randomMovie()");
+  assert.equal(writes.length, 0);
+  assert.equal(ui.run("state.movies.length"), 0);
+  assert.equal(ui.nodes.get("add-selected-movie").textContent, "Añadir a la colección del grupo");
+  await ui.run("addPreviewMovie()");
+  assert.equal(writes.length, 1);
+  assert.equal(ui.run("previewMovie.id"), "tmdb-42");
+  assert.equal(ui.run("state.movies.length"), 0);
+  assert.equal(ui.nodes.get("retry-movie").hidden, false);
+  fail = false;
+  const adding = ui.nodes.get("retry-movie").listeners.click();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(ui.nodes.get("add-selected-movie").disabled, true);
+  await ui.run("addPreviewMovie()");
+  assert.equal(writes.length, 2);
+  pending.resolve(json(snapshot({ movies: [sharedMovie()], revision: 1 })));
+  await adding;
+  assert.equal(ui.run("state.movies.length"), 1);
+  assert.equal(ui.run("state.draft.movieId"), "tmdb-42");
+  assert.equal(ui.run("previewMovie"), null);
+  assert.equal(writes[1].movie.tmdbId, 42);
+});
+
+test("switching lists clears previews and ignores late random responses", async () => {
+  const late = deferred();
+  let delay = false;
+  const ui = app({ fetch: async (url) => {
+    if (url.pathname === "/movies") return json(page([movie()]));
+    return delay ? late.promise : json({ movie: movie() });
+  } });
+  ui.run("api.baseUrl = 'https://api.example.com'");
+  await ui.run("randomMovie()");
+  enterParty(ui);
+  assert.equal(ui.run("previewMovie"), null);
+  await ui.run("randomMovie()");
+  assert.equal(ui.run("previewMovie.id"), "tmdb-42");
+  ui.run("leaveParty()");
+  assert.equal(ui.run("previewMovie"), null);
+  delay = true;
+  const choosing = ui.run("randomMovie()");
+  await new Promise((resolve) => setImmediate(resolve));
+  enterParty(ui);
+  late.resolve(json({ movie: movie() }));
+  await choosing;
+  assert.equal(ui.run("previewMovie"), null);
+  assert.equal(ui.run("state.movies.length"), 0);
+  assert.equal(ui.nodes.get("add-selected-movie").hidden, true);
+});
 
 test("party UI, roles, API errors, storage warnings and copy feedback switch language without changing names", async () => {
   const ui = app({ fetch: async () => json(page([])) });

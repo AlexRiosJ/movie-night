@@ -802,7 +802,9 @@ function renderCast(movie) {
 
 function renderPicker() {
   const savedMovie = movieById(state.draft.movieId);
-  const movie = moviePresentation(previewMovie ?? savedMovie);
+  const movie = moviePresentation(previewMovie && savedMovie
+    ? { ...previewMovie, watched: savedMovie.watched, addedByName: savedMovie.addedByName }
+    : previewMovie ?? savedMovie);
   const food = foodById(state.draft.foodId);
   const count = candidates().length;
   const online = movieSource() === "catalog";

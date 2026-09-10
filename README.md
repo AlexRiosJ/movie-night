@@ -252,8 +252,8 @@ documentation changes.
 ## Using the app
 
 - Choose **Movie**, **Arcade**, or **Zine** with the style selector, then use the
-  adjacent **Claro / Oscuro** button to switch color mode independently.
-  The button uses a sun/moon icon on compact screens. Changing styles keeps your
+  **Claro / Oscuro** button inside **Preferencias** to switch color mode independently.
+  The button keeps its text and sun/moon icon on compact screens. Changing styles keeps your
   chosen mode. Both preferences persist; personal-mode preferences also sync between tabs.
   New visitors start with **Movie** in light mode.
 - **Movie** has a cinema-inspired presentation:
@@ -271,7 +271,9 @@ documentation changes.
   and plan controls, and neither changes your movie preferences.
 - **Explorar** browses popular movies, searches by title, and pages through
   results. With an empty title, the genre selector filters discovery.
-  Title searches span all genres and distinguish releases by year.
+  Title searches span all genres and distinguish releases by year. The search
+  form sits above the planner, available from every list; submitting it opens
+  **Explorar** and scrolls to the results.
 - **Preferencias > Idioma de la app** (**Preferences > App language**) chooses **Español** or
   **English** for the entire app: menus, forms, food suggestions, parties,
   alerts, validation, confirmation dialogs, empty states, accessible labels,
@@ -279,7 +281,8 @@ documentation changes.
   Spanish is the default; the choice persists with personal preferences or
   the local view of each party. Switching updates the current page without
   reloading or resetting unfinished forms, the selected style, or color mode.
-  Preferences sit in the header beside the style and light/dark controls.
+  Preferences sit in the header beside the style selector and contain both
+  the app language and light/dark controls.
   Changing language reloads catalog results from page 1 with the same search
   and genre, cancels older requests, and refreshes the selected TMDB movie
   without changing the draft, food, watched state, or plans.
@@ -312,7 +315,15 @@ documentation changes.
   different discovery pages, avoids the current movie, and respects your genre
   and watched filter. Discovery includes released movies with at least 50 votes,
   ordered by popularity, within TMDB's 500-page limit. It is not a uniform draw
-  from every movie in TMDB. Up to five pages are tried per pick.
+  from every movie in TMDB. Up to five pages are tried per pick. Random results
+  are previews only: they do not add movies to personal or shared collections.
+  Use **Añadir a mi colección** or **Añadir a la colección del grupo** below the
+  movie details to save the preview to the active list. Choose personal mode
+  or a party using **Movie party** before picking. Unsaved previews last only
+  in the current tab and are cleared when switching lists or reloading.
+  Add a new movie before saving a plan; movies already in the active collection
+  can be planned immediately without adding duplicates. Adding a preview keeps
+  your selected food, date, and place.
 - **Preferencias > Elegir desde > Mi coleccion** (or **Coleccion del grupo** in a
   party) chooses from the active collection, including custom additions.
   **Solo pendientes** excludes movies marked watched in that collection;

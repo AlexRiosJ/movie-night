@@ -1,13 +1,15 @@
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 
-const migration = readFileSync(new URL("./migrations/0001_parties.sql", import.meta.url), "utf8");
+const migrations = readdirSync(new URL("./migrations/", import.meta.url))
+  .filter((name) => name.endsWith(".sql")).sort()
+  .map((name) => readFileSync(new URL(`./migrations/${name}`, import.meta.url), "utf8"));
 
 // Execute production SQL with real transactions, not a SQL mock/parser.
 export class D1Database {
   constructor(migrate = true) {
     this.sqlite = new DatabaseSync(":memory:");
-    if (migrate) this.sqlite.exec(migration);
+    if (migrate) migrations.forEach((migration) => this.sqlite.exec(migration));
     this.batches = [];
     this.sessions = [];
   }

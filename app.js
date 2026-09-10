@@ -858,6 +858,30 @@ async function toggleWatched(id) {
     : t(`"${title}" vuelve a pendientes.`, `"${title}" is unwatched again.`));
 }
 
+async function deleteMovie(id) {
+  if (sharedBusy()) { notify(t("Espera a que termine la operaci\u00f3n de la party.", "Wait for the party operation to finish.")); return; }
+  const movie = movieById(id);
+  if (!movie) {
+    notify(t("No se encontr\u00f3 la pel\u00edcula que quieres eliminar.", "The movie you want to delete was not found."));
+    return;
+  }
+  if (!canDeletePartyEntry(movie.addedBy)) {
+    notify(t("Solo quien a\u00f1adi\u00f3 la pel\u00edcula o el anfitri\u00f3n puede eliminarla de la colecci\u00f3n del grupo.",
+      "Only the member who added the movie or the host can delete it from the group collection."));
+    return;
+  }
+  const title = movieDisplay(movie).title;
+  if (!window.confirm(t(`\u00bfEliminar "${title}" de la colecci\u00f3n del grupo? Tambi\u00e9n se eliminar\u00e1n todas sus noches programadas y completadas, incluidas las creadas por otros miembros. Este cambio afecta a todo el grupo y no se puede deshacer.`,
+    `Delete "${title}" from the group collection? All its scheduled and completed nights will also be deleted, including those created by other members. This affects the whole group and cannot be undone.`))) return;
+  const index = [...$("movie-list").children].findIndex((row) => row.contains(document.activeElement));
+  cancelSelection();
+  if (!await writeParty(`/movies/${encodeURIComponent(id)}`, "DELETE")) return;
+  persistState();
+  focusAfterRemoval("movie-list", ".delete-movie", Math.max(0, index), `[data-movie-tab="${state.preferences.movieTab}"]`);
+  notify(t(`"${title}" y sus noches asociadas se eliminaron de la colecci\u00f3n del grupo.`,
+    `"${title}" and its associated nights were deleted from the group collection.`));
+}
+
 function renderMovies() {
   const watched = state.movies.filter((movie) => movie.watched).length;
   $("collection-total").textContent = state.movies.length;
@@ -887,6 +911,11 @@ function renderMovies() {
     const choose = row.querySelector(".choose-movie");
     choose.dataset.id = movie.id;
     choose.setAttribute("aria-label", t(`Elegir ${movie.title} para mi plan`, `Choose ${movie.title} for my plan`));
+    const remove = row.querySelector(".delete-movie");
+    remove.dataset.id = movie.id;
+    remove.setAttribute("aria-label", t(`Eliminar ${movie.title} de la colecci\u00f3n del grupo`, `Delete ${movie.title} from the group collection`));
+    remove.hidden = !canDeletePartyEntry(movie.addedBy);
+    remove.disabled = sharedBusy();
     fragment.append(row);
   });
   $("movie-list").replaceChildren(fragment);
@@ -1024,8 +1053,7 @@ function renderPlans() {
     const remove = row.querySelector(".delete-plan");
     remove.dataset.id = plan.id;
     remove.setAttribute("aria-label", t(`Eliminar el plan de ${movie.title}`, `Delete the plan for ${movie.title}`));
-    remove.hidden = Boolean(party.session && plan.createdBy !== party.session.memberId
-      && !party.snapshot?.members.some((member) => member.id === party.session.memberId && member.role === "host"));
+    remove.hidden = Boolean(party.session && !canDeletePartyEntry(plan.createdBy));
     fragment.append(row);
   });
   $("plan-list").replaceChildren(fragment);
@@ -1177,8 +1205,10 @@ $("add-movie-form").addEventListener("submit", addMovie);
 $("movie-list").addEventListener("click", (event) => {
   const watch = event.target.closest(".watch-toggle");
   const choose = event.target.closest(".choose-movie");
+  const remove = event.target.closest(".delete-movie");
   if (watch) toggleWatched(watch.dataset.id);
   if (choose) selectMovie(choose.dataset.id);
+  if (remove) deleteMovie(remove.dataset.id);
 });
 $("plan-list").addEventListener("click", (event) => {
   const toggle = event.target.closest(".complete-plan");

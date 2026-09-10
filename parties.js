@@ -144,7 +144,7 @@ function applyPartySnapshot(snapshot, initial = false) {
   if (state.draft.movieId && !movieById(state.draft.movieId)) state.draft.movieId = null;
   if (initial) renderAll();
   else {
-    const focused = document.activeElement.closest(".watch-toggle, .choose-movie, .complete-plan, .delete-plan, .choose-catalog-movie");
+    const focused = document.activeElement.closest(".watch-toggle, .choose-movie, .delete-movie, .complete-plan, .delete-plan, .choose-catalog-movie");
     const list = focused?.closest("#movie-list, #plan-list, #catalog-list");
     renderPicker();
     renderMovies();
@@ -240,6 +240,11 @@ function leaveParty() {
 
 function sharedBusy() {
   return party.loading || party.writing || party.entering;
+}
+
+function canDeletePartyEntry(authorId) {
+  return Boolean(party.session && (authorId === party.session.memberId
+    || party.snapshot?.members.some((member) => member.id === party.session.memberId && member.role === "host")));
 }
 
 async function writeParty(path, method, body = null) {
@@ -374,7 +379,7 @@ function renderParty() {
   if (party.sessions.some((saved) => saved.partyId === previous && saved.partyId !== party.session?.partyId)) select.value = previous;
   $("party-resume-button").disabled = sharedBusy();
   $("add-movie-submit").disabled = sharedBusy();
-  document.querySelectorAll(".watch-toggle, .complete-plan, .delete-plan, .choose-catalog-movie").forEach((button) => {
+  document.querySelectorAll(".watch-toggle, .delete-movie, .complete-plan, .delete-plan, .choose-catalog-movie").forEach((button) => {
     button.disabled = sharedBusy();
   });
   const collectionLabel = party.session ? t("Colecci\u00f3n del grupo", "Group collection") : t("Mi colecci\u00f3n", "My collection");

@@ -33,6 +33,7 @@ let selectionController;
 let selectionRetry;
 let pickerMessage = "";
 let failedPosterPath = null;
+let renderedCastKey;
 
 function readApiConfig() {
   const base = window.MOVIE_NIGHT_CONFIG?.apiBaseUrl;
@@ -96,7 +97,7 @@ function isStringList(value, count, length) {
   return Array.isArray(value) && value.length <= count && value.every((item) => isText(item, length));
 }
 
-function isPosterPath(value) {
+function isImagePath(value) {
   return value === null || (typeof value === "string" && /^\/[a-zA-Z0-9_-]+\.(jpg|png)$/i.test(value));
 }
 
@@ -110,9 +111,12 @@ function isMovieData(movie) {
 
 function isTmdbData(movie) {
   return isMovieData(movie) && Number.isSafeInteger(movie.tmdbId) && movie.tmdbId > 0
-    && isPosterPath(movie.posterPath) && isStringList(movie.cast, 12, 120)
+    && isImagePath(movie.posterPath) && isStringList(movie.cast, 12, 120)
+    && (movie.castProfiles === undefined || (Array.isArray(movie.castProfiles) && movie.castProfiles.length <= 12
+      && movie.castProfiles.every((person) => isRecord(person) && isText(person.name, 120) && isImagePath(person.profilePath))))
     && isStringList(movie.directors, 6, 120) && isStringList(movie.genres, 20, 80)
     && typeof movie.originalTitle === "string" && movie.originalTitle.length <= 300
+    && (movie.voteCount === undefined || movie.voteCount === null || (Number.isSafeInteger(movie.voteCount) && movie.voteCount >= 0))
     && (movie.rating === null || (Number.isFinite(movie.rating) && movie.rating >= 0 && movie.rating <= 10));
 }
 
@@ -172,14 +176,18 @@ function decodeState(raw) {
     storageWarning("Tus datos guardados tienen un formato no compatible. Se han conservado intactos; los cambios de esta sesi\u00f3n no se guardar\u00e1n.");
     return null;
   }
-  // Migrate only known retired values after validation, preserving the rest of the data.
-  if (parsed.colorMode === undefined) {
-    parsed.colorMode = ["night", "movie", "arcade"].includes(parsed.theme) ? "dark" : "light";
+  return migrateStoredState(parsed);
+}
+
+// Personal and party preferences share the same migration after validation.
+function migrateStoredState(value) {
+  if (value.colorMode === undefined) {
+    value.colorMode = ["night", "movie", "arcade"].includes(value.theme) ? "dark" : "light";
   }
-  if (LEGACY_THEMES.includes(parsed.theme)) parsed.theme = "movie";
-  parsed.movies = parsed.movies.map(normalizeMovieGenre);
-  if (parsed.preferences.genre === "christmas") parsed.preferences.genre = "all";
-  return parsed;
+  if (LEGACY_THEMES.includes(value.theme)) value.theme = "movie";
+  value.movies = value.movies.map(normalizeMovieGenre);
+  if (value.preferences.genre === "christmas") value.preferences.genre = "all";
+  return value;
 }
 
 function loadState() {
@@ -196,6 +204,7 @@ function loadState() {
 let state = loadState();
 
 function persistState() {
+  if (party.session) return party.loading ? false : persistPartyView();
   if (!storageWritable) return false;
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
@@ -288,7 +297,7 @@ async function fetchMovieDetails(tmdbId, signal) {
 }
 
 function apiErrorMessage(error) {
-  if (error instanceof MovieApiError) return error.message;
+  if (error instanceof MovieApiError || error instanceof PartyApiError) return error.message;
   console.error("Movie Night: catalog", error);
   return "No se pudo cargar la pel\u00edcula. Int\u00e9ntalo de nuevo.";
 }
@@ -376,6 +385,10 @@ function cancelSelection() {
 }
 
 async function selectFromApi(loadMovie, retry, { genre = null, forceFood = false, focus = false } = {}) {
+  if (sharedBusy()) {
+    notify("Espera a que termine la operaci\u00f3n de la party.");
+    return;
+  }
   cancelSelection();
   const controller = new AbortController();
   selectionController = controller;
@@ -383,9 +396,25 @@ async function selectFromApi(loadMovie, retry, { genre = null, forceFood = false
   renderPicker();
   if (focus) $("planner").scrollIntoView({ block: "start" });
   let movie;
+  let savedMovie;
   try {
     movie = await loadMovie(controller.signal);
     if (controller.signal.aborted) return;
+    if (party.session) {
+      const snapshot = await writeParty("/movies", "POST", {
+        movie: { ...movie, genre: genre ?? movie.genre, watched: false, custom: false },
+      });
+      if (controller.signal.aborted) return;
+      if (!snapshot) {
+        selectionController = null;
+        pickerMessage = "No se pudo confirmar que la pel\u00edcula se guard\u00f3 en la party. Actualiza la lista antes de reintentar.";
+        selectionRetry = retry;
+        renderPicker();
+        return;
+      }
+      savedMovie = state.movies.find((saved) => saved.tmdbId === movie.tmdbId);
+      if (!savedMovie) throw new PartyApiError("La pel\u00edcula no apareci\u00f3 en la lista compartida. Actualiza la party.");
+    } else savedMovie = saveApiMovie(movie, genre);
   } catch (error) {
     if (controller.signal.aborted) return;
     selectionController = null;
@@ -396,7 +425,6 @@ async function selectFromApi(loadMovie, retry, { genre = null, forceFood = false
   }
   selectionController = null;
   pickerMessage = "";
-  const savedMovie = saveApiMovie(movie, genre);
   state.draft.movieId = savedMovie.id;
   if (forceFood || state.preferences.autoFood) state.draft.foodId = pickRandom(FOODS, state.draft.foodId).id;
   const saved = persistState();
@@ -408,12 +436,16 @@ async function selectFromApi(loadMovie, retry, { genre = null, forceFood = false
     $("planner").scrollIntoView({ block: "start" });
     $("movie-title").focus({ preventScroll: true });
   }
-  notify(saved ? `${savedMovie.title}: lista para tu pr\u00f3ximo plan.` : "Pel\u00edcula elegida solo para esta sesi\u00f3n.");
+  notify(saved || party.session ? `${savedMovie.title}: lista para tu pr\u00f3ximo plan.` : "Pel\u00edcula elegida solo para esta sesi\u00f3n.");
 }
 
 function chooseCatalogMovie(movie) {
+  if (sharedBusy()) {
+    notify("Espera a que termine la operaci\u00f3n de la party.");
+    return;
+  }
   const existing = savedApiMovie(movie);
-  if (existing?.tmdbId) {
+  if (existing?.tmdbId && existing.castProfiles !== undefined) {
     selectMovie(existing.id);
     return;
   }
@@ -479,6 +511,10 @@ function randomFood() {
 }
 
 function selectMovie(id) {
+  if (party.loading || party.entering) {
+    notify("Espera a que termine de cargar la party.");
+    return;
+  }
   cancelSelection();
   const movie = movieById(id);
   if (!movie) {
@@ -494,23 +530,58 @@ function selectMovie(id) {
   notify(`${movie.title}: lista para tu pr\u00f3ximo plan.`);
 }
 
+function renderCast(movie) {
+  const cast = movie?.cast ?? [];
+  const key = JSON.stringify([movie?.id, cast, movie?.castProfiles]);
+  // Keep in-flight images and horizontal scroll intact when only picker status or food changes.
+  if (key === renderedCastKey) return;
+  renderedCastKey = key;
+  const fragment = document.createDocumentFragment();
+  cast.forEach((name) => {
+    const row = $("cast-member-template").content.firstElementChild.cloneNode(true);
+    row.querySelector(".cast-name").textContent = name;
+    const profilePath = movie.castProfiles?.find((person) => person.name === name)?.profilePath;
+    const photo = row.querySelector(".cast-photo");
+    const placeholder = row.querySelector(".cast-placeholder");
+    const showPhoto = Boolean(profilePath);
+    photo.hidden = !showPhoto;
+    placeholder.hidden = showPhoto;
+    if (showPhoto) {
+      photo.addEventListener("error", () => {
+        photo.hidden = true;
+        placeholder.hidden = false;
+      }, { once: true });
+      photo.src = `https://image.tmdb.org/t/p/w185${profilePath}`;
+    }
+    fragment.append(row);
+  });
+  $("movie-cast").replaceChildren(fragment);
+  $("movie-cast").hidden = cast.length === 0;
+  $("movie-cast-empty").hidden = cast.length > 0;
+}
+
 function renderPicker() {
   const movie = movieById(state.draft.movieId);
   const food = foodById(state.draft.foodId);
   const count = candidates().length;
   const online = movieSource() === "catalog";
-  const busy = Boolean(selectionController);
+  const busy = Boolean(selectionController) || sharedBusy();
   $("movie-badge").textContent = movie ? MOVIE_GENRES[movie.genre].toLocaleUpperCase("es") : "POR DESCUBRIR";
   $("movie-title").textContent = movie ? movie.title : "Tu pr\u00f3xima favorita te espera.";
   $("movie-meta").textContent = movie
     ? [movie.year ?? "A\u00f1o no disponible", movie.minutes ? `${movie.minutes} min` : "Duraci\u00f3n no disponible",
-      movie.custom ? "A\u00f1adida por ti" : null, movie.tmdbId && movie.rating !== null ? `TMDB ${movie.rating.toFixed(1)}/10` : null,
+      movie.addedByName ? `A\u00f1adida por ${movie.addedByName}` : movie.custom ? "A\u00f1adida por ti" : null,
       movie.watched ? "Ya vista" : null].filter(Boolean).join(" \u00b7 ")
     : online ? "Un cat\u00e1logo entero por descubrir." : `${state.movies.length} pel\u00edculas en tu colecci\u00f3n.`;
   $("movie-description").textContent = movie ? movie.description : "Pulsa el bot\u00f3n y descubre qu\u00e9 ver esta noche.";
   const details = movie?.tmdbId ? movie : null;
+  $("movie-score").hidden = !details;
+  $("movie-score-value").textContent = details && details.rating !== null ? `${Math.round(details.rating * 10)}%` : "\u2014";
+  $("movie-score-votes").textContent = !details || details.rating === null ? "Sin puntuaci\u00f3n en TMDB"
+    : details.voteCount == null ? "TMDB \u00b7 Votos no disponibles"
+    : `TMDB \u00b7 ${details.voteCount.toLocaleString("es")} ${details.voteCount === 1 ? "voto" : "votos"}`;
   $("movie-credits").hidden = !details;
-  $("movie-cast").textContent = details?.cast.join(", ") || "Reparto no disponible";
+  renderCast(details);
   $("movie-directors").textContent = details?.directors.join(", ") || "Direcci\u00f3n no disponible";
   $("movie-genres").textContent = details?.genres.join(", ") || "G\u00e9neros no disponibles";
   $("movie-original-title").textContent = details?.originalTitle || "No disponible";
@@ -537,22 +608,29 @@ function renderPicker() {
     ? `${count} ${count === 1 ? "pel\u00edcula" : "pel\u00edculas"} en el bombo`
     : "Sin opciones. Abre Preferencias o a\u00f1ade una peli en Mi colecci\u00f3n.";
   $("random-movie").disabled = busy || (online ? !api.baseUrl : count === 0);
+  $("random-movie").setAttribute("aria-busy", String(busy));
+  $("random-movie-icon").hidden = busy;
+  $("random-movie-spinner").hidden = !busy;
+  $("picker-status").className = busy ? "sr-only" : "helper";
   $("picker-status").hidden = !pickerMessage;
   $("picker-status").textContent = pickerMessage;
   $("retry-movie").hidden = !selectionRetry || busy;
   $("food-name").textContent = food ? food.name : "Comida por elegir";
   $("food-description").textContent = food ? food.description : "Porque una buena peli merece un buen bocado.";
   $("save-plan").disabled = busy || !movie || !food;
-  $("plan-hint").textContent = busy ? "Espera a que termine de cargar la pel\u00edcula."
-    : movie && food ? "Pon fecha y lugar. Lo dem\u00e1s ya est\u00e1." : "Elige una peli y una comida para empezar.";
+  $("plan-hint").textContent = movie && food ? "Pon fecha y lugar. Lo dem\u00e1s ya est\u00e1." : "Elige una peli y una comida para empezar.";
 }
 
 function normalizedTitle(title) {
   return title.normalize("NFKC").toLocaleLowerCase("es");
 }
 
-function addMovie(event) {
+async function addMovie(event) {
   event?.preventDefault();
+  if (sharedBusy()) {
+    notify("Espera a que termine la operaci\u00f3n de la party.");
+    return;
+  }
   const input = $("new-movie-title");
   input.setCustomValidity("");
   const title = input.value.trim().replace(/\s+/g, " ");
@@ -568,33 +646,60 @@ function addMovie(event) {
     input.reportValidity();
     return;
   }
-  state.movies.push({
+  const movie = {
     id: crypto.randomUUID(), title, genre, year: null, minutes: null,
     description: "Una de tus elegidas. El mejor motivo para reservar una noche de pel\u00edcula.",
     watched: false, custom: true,
-  });
+  };
+  if (party.session) {
+    if (!await writeParty("/movies", "POST", { movie })) return;
+  } else state.movies.push(movie);
   state.preferences.movieTab = "pending";
   const saved = persistState();
   $("add-movie-form").reset();
   closeAddMovie();
   renderMovies();
   renderPicker();
-  notify(saved ? `"${title}" ya est\u00e1 en pendientes.` : "Pel\u00edcula a\u00f1adida solo para esta sesi\u00f3n.");
+  notify(saved || party.session ? `"${title}" ya est\u00e1 en pendientes.` : "Pel\u00edcula a\u00f1adida solo para esta sesi\u00f3n.");
 }
 
-function toggleWatched(id) {
+async function toggleWatched(id) {
+  if (sharedBusy()) { notify("Espera a que termine la operaci\u00f3n de la party."); return; }
   const movie = movieById(id);
   if (!movie) {
     notify("No se encontr\u00f3 la pel\u00edcula que quieres actualizar.");
     return;
   }
   const activeIndex = [...$("movie-list").children].findIndex((row) => row.contains(document.activeElement));
-  movie.watched = !movie.watched;
+  const watched = !movie.watched;
+  if (party.session) {
+    if (!await writeParty(`/movies/${encodeURIComponent(id)}`, "PATCH", { watched })) return;
+  } else movie.watched = watched;
   persistState();
   renderMovies();
   renderPicker();
   if (activeIndex >= 0) focusAfterRemoval("movie-list", ".watch-toggle", activeIndex, `[data-movie-tab="${state.preferences.movieTab}"]`);
-  notify(movie.watched ? `"${movie.title}" pasa a ya vistas.` : `"${movie.title}" vuelve a pendientes.`);
+  notify(watched ? `"${movie.title}" pasa a ya vistas.` : `"${movie.title}" vuelve a pendientes.`);
+}
+
+async function deleteMovie(id) {
+  if (sharedBusy()) { notify("Espera a que termine la operaci\u00f3n de la party."); return; }
+  const movie = movieById(id);
+  if (!movie) {
+    notify("No se encontr\u00f3 la pel\u00edcula que quieres eliminar.");
+    return;
+  }
+  if (!canDeletePartyEntry(movie.addedBy)) {
+    notify("Solo quien a\u00f1adi\u00f3 la pel\u00edcula o el anfitri\u00f3n puede eliminarla de la colecci\u00f3n del grupo.");
+    return;
+  }
+  if (!window.confirm(`\u00bfEliminar "${movie.title}" de la colecci\u00f3n del grupo? Tambi\u00e9n se eliminar\u00e1n todas sus noches programadas y completadas, incluidas las creadas por otros miembros. Este cambio afecta a todo el grupo y no se puede deshacer.`)) return;
+  const index = [...$("movie-list").children].findIndex((row) => row.contains(document.activeElement));
+  cancelSelection();
+  if (!await writeParty(`/movies/${encodeURIComponent(id)}`, "DELETE")) return;
+  persistState();
+  focusAfterRemoval("movie-list", ".delete-movie", Math.max(0, index), `[data-movie-tab="${state.preferences.movieTab}"]`);
+  notify(`"${movie.title}" y sus noches asociadas se eliminaron de la colecci\u00f3n del grupo.`);
 }
 
 function renderMovies() {
@@ -614,7 +719,8 @@ function renderMovies() {
     const row = $("movie-row-template").content.firstElementChild.cloneNode(true);
     row.querySelector(".movie-row-title").textContent = movie.title;
     row.querySelector(".movie-row-meta").textContent = [MOVIE_GENRES[movie.genre], movie.year,
-      movie.minutes ? `${movie.minutes} min` : null, movie.tmdbId ? "TMDB" : movie.custom ? "A\u00f1adida por ti" : null].filter(Boolean).join(" \u00b7 ");
+      movie.minutes ? `${movie.minutes} min` : null, movie.tmdbId ? "TMDB" : null,
+      movie.addedByName ? `A\u00f1adida por ${movie.addedByName}` : movie.custom ? "A\u00f1adida por ti" : null].filter(Boolean).join(" \u00b7 ");
     const watch = row.querySelector(".watch-toggle");
     watch.dataset.id = movie.id;
     watch.setAttribute("aria-pressed", String(movie.watched));
@@ -622,6 +728,11 @@ function renderMovies() {
     const choose = row.querySelector(".choose-movie");
     choose.dataset.id = movie.id;
     choose.setAttribute("aria-label", `Elegir ${movie.title} para mi plan`);
+    const remove = row.querySelector(".delete-movie");
+    remove.dataset.id = movie.id;
+    remove.setAttribute("aria-label", `Eliminar ${movie.title} de la colecci\u00f3n del grupo`);
+    remove.hidden = !canDeletePartyEntry(movie.addedBy);
+    remove.disabled = sharedBusy();
     fragment.append(row);
   });
   $("movie-list").replaceChildren(fragment);
@@ -631,8 +742,9 @@ function renderMovies() {
   $("movie-empty-description").textContent = showWatched ? "Marca una pel\u00edcula como vista o completa una movie night." : "A\u00f1ade otra peli o vuelve a disfrutar de una de tus favoritas.";
 }
 
-function savePlan(event) {
+async function savePlan(event) {
   event?.preventDefault();
+  if (sharedBusy()) { notify("Espera a que termine la operaci\u00f3n de la party."); return; }
   if (selectionController) {
     notify("Espera a que termine de cargar la pel\u00edcula antes de guardar el plan.");
     return;
@@ -658,7 +770,10 @@ function savePlan(event) {
     notify("Ese plan ya est\u00e1 en tus movie nights.");
     return;
   }
-  state.plans.push({ id: crypto.randomUUID(), movieId, foodId, date, place, completed: false });
+  const plan = { id: crypto.randomUUID(), movieId, foodId, date, place, completed: false };
+  if (party.session) {
+    if (!await writeParty("/plans", "POST", { plan })) return;
+  } else state.plans.push(plan);
   state.draft.date = date;
   state.draft.place = place;
   state.preferences.planTab = "scheduled";
@@ -667,28 +782,35 @@ function savePlan(event) {
   const saved = persistState();
   renderPlans();
   renderOrganizer();
-  notify(saved ? "Movie night guardada. Ya tienes algo bueno que esperar." : "Plan creado solo para esta sesi\u00f3n. No se pudo guardar en el navegador.");
+  notify(saved || party.session ? "Movie night guardada. Ya tienes algo bueno que esperar." : "Plan creado solo para esta sesi\u00f3n. No se pudo guardar en el navegador.");
 }
 
-function togglePlan(id) {
+async function togglePlan(id) {
+  if (sharedBusy()) { notify("Espera a que termine la operaci\u00f3n de la party."); return; }
   const plan = state.plans.find((item) => item.id === id);
   if (!plan) {
     notify("No se encontr\u00f3 el plan que quieres actualizar.");
     return;
   }
   const activeIndex = [...$("plan-list").children].findIndex((row) => row.contains(document.activeElement));
-  plan.completed = !plan.completed;
-  // Reopening a plan does not erase viewing history; that is an independent library action.
-  if (plan.completed) movieById(plan.movieId).watched = true;
+  const completed = !plan.completed;
+  if (party.session) {
+    if (!await writeParty(`/plans/${encodeURIComponent(id)}`, "PATCH", { completed })) return;
+  } else {
+    plan.completed = completed;
+    // Reopening a plan does not erase viewing history; that is an independent library action.
+    if (completed) movieById(plan.movieId).watched = true;
+  }
   persistState();
   renderPlans();
   renderMovies();
   renderPicker();
   if (activeIndex >= 0) focusAfterRemoval("plan-list", ".complete-plan", activeIndex, `[data-plan-tab="${state.preferences.planTab}"]`);
-  notify(plan.completed ? "Noche completada y pel\u00edcula marcada como vista." : "Tu noche vuelve a estar programada.");
+  notify(completed ? "Noche completada y pel\u00edcula marcada como vista." : "Tu noche vuelve a estar programada.");
 }
 
-function deletePlan(id) {
+async function deletePlan(id) {
+  if (sharedBusy()) { notify("Espera a que termine la operaci\u00f3n de la party."); return; }
   const plan = state.plans.find((item) => item.id === id);
   if (!plan) {
     notify("No se encontr\u00f3 el plan que quieres eliminar.");
@@ -696,7 +818,9 @@ function deletePlan(id) {
   }
   if (!window.confirm(`\u00bfEliminar el plan de "${movieById(plan.movieId).title}"? La pel\u00edcula seguir\u00e1 en tu colecci\u00f3n.`)) return;
   const index = [...$("plan-list").children].findIndex((row) => row.contains(document.activeElement));
-  state.plans = state.plans.filter((item) => item.id !== id);
+  if (party.session) {
+    if (!await writeParty(`/plans/${encodeURIComponent(id)}`, "DELETE")) return;
+  } else state.plans = state.plans.filter((item) => item.id !== id);
   persistState();
   renderPlans();
   focusAfterRemoval("plan-list", ".delete-plan", Math.max(0, index), `[data-plan-tab="${state.preferences.planTab}"]`);
@@ -704,7 +828,7 @@ function deletePlan(id) {
 }
 
 function focusAfterRemoval(listId, selector, index, fallback) {
-  const buttons = $(listId).querySelectorAll(selector);
+  const buttons = [...$(listId).querySelectorAll(selector)].filter((button) => !button.hidden);
   const target = buttons[Math.min(index, buttons.length - 1)] || document.querySelector(fallback);
   target.focus({ preventScroll: true });
 }
@@ -726,6 +850,7 @@ function renderPlans() {
     const movie = movieById(plan.movieId);
     const row = $("plan-row-template").content.firstElementChild.cloneNode(true);
     row.querySelector(".plan-movie-title").textContent = movie.title;
+    row.querySelector(".plan-author").textContent = plan.createdByName ? `Plan de ${plan.createdByName}` : "";
     const time = row.querySelector("time");
     time.dateTime = plan.date;
     time.textContent = dateFormatter.format(new Date(`${plan.date}T12:00:00`));
@@ -739,6 +864,7 @@ function renderPlans() {
     const remove = row.querySelector(".delete-plan");
     remove.dataset.id = plan.id;
     remove.setAttribute("aria-label", `Eliminar el plan de ${movie.title}`);
+    remove.hidden = Boolean(party.session && !canDeletePartyEntry(plan.createdBy));
     fragment.append(row);
   });
   $("plan-list").replaceChildren(fragment);
@@ -882,8 +1008,10 @@ $("add-movie-form").addEventListener("submit", addMovie);
 $("movie-list").addEventListener("click", (event) => {
   const watch = event.target.closest(".watch-toggle");
   const choose = event.target.closest(".choose-movie");
+  const remove = event.target.closest(".delete-movie");
   if (watch) toggleWatched(watch.dataset.id);
   if (choose) selectMovie(choose.dataset.id);
+  if (remove) deleteMovie(remove.dataset.id);
 });
 $("plan-list").addEventListener("click", (event) => {
   const toggle = event.target.closest(".complete-plan");
@@ -960,6 +1088,10 @@ window.addEventListener("storage", (event) => {
   if (event.key !== STORAGE_KEY && event.key !== null) return;
   const updated = event.newValue === null ? freshState() : decodeState(event.newValue);
   if (!updated) return;
+  if (party.session) {
+    party.localState = updated;
+    return;
+  }
   cancelSelection();
   state = updated;
   storageWritable = true;
@@ -969,3 +1101,4 @@ window.addEventListener("storage", (event) => {
 });
 
 renderAll();
+const partyReady = initializeParties();

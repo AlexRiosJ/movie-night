@@ -37,6 +37,7 @@ let selectionController;
 let selectionRetry;
 let pickerMessage = "";
 let failedPosterPath = null;
+const failedProfilePaths = new Set();
 
 function readApiConfig() {
   const base = window.MOVIE_NIGHT_CONFIG?.apiBaseUrl;
@@ -95,7 +96,7 @@ function isStringList(value, count, length) {
   return Array.isArray(value) && value.length <= count && value.every((item) => isText(item, length));
 }
 
-function isPosterPath(value) {
+function isImagePath(value) {
   return value === null || (typeof value === "string" && /^\/[a-zA-Z0-9_-]+\.(jpg|png)$/i.test(value));
 }
 
@@ -108,9 +109,12 @@ function isMovieData(movie) {
 
 function isTmdbData(movie) {
   return isMovieData(movie) && Number.isSafeInteger(movie.tmdbId) && movie.tmdbId > 0
-    && isPosterPath(movie.posterPath) && isStringList(movie.cast, 12, 120)
+    && isImagePath(movie.posterPath) && isStringList(movie.cast, 12, 120)
+    && (movie.castProfiles === undefined || (Array.isArray(movie.castProfiles) && movie.castProfiles.length <= 12
+      && movie.castProfiles.every((person) => isRecord(person) && isText(person.name, 120) && isImagePath(person.profilePath))))
     && isStringList(movie.directors, 6, 120) && isStringList(movie.genres, 20, 80)
     && typeof movie.originalTitle === "string" && movie.originalTitle.length <= 300
+    && (movie.voteCount === undefined || movie.voteCount === null || (Number.isSafeInteger(movie.voteCount) && movie.voteCount >= 0))
     && (movie.rating === null || (Number.isFinite(movie.rating) && movie.rating >= 0 && movie.rating <= 10));
 }
 
@@ -402,7 +406,7 @@ async function selectFromApi(loadMovie, retry, { genre = null, forceFood = false
 
 function chooseCatalogMovie(movie) {
   const existing = savedApiMovie(movie);
-  if (existing?.tmdbId) {
+  if (existing?.tmdbId && existing.castProfiles !== undefined) {
     selectMovie(existing.id);
     return;
   }
@@ -483,6 +487,33 @@ function selectMovie(id) {
   notify(`${movie.title}: lista para tu pr\u00f3ximo plan.`);
 }
 
+function renderCast(movie) {
+  const fragment = document.createDocumentFragment();
+  const cast = movie?.cast ?? [];
+  cast.forEach((name) => {
+    const row = $("cast-member-template").content.firstElementChild.cloneNode(true);
+    row.querySelector(".cast-name").textContent = name;
+    const profilePath = movie.castProfiles?.find((person) => person.name === name)?.profilePath;
+    const photo = row.querySelector(".cast-photo");
+    const placeholder = row.querySelector(".cast-placeholder");
+    const showPhoto = Boolean(profilePath && !failedProfilePaths.has(profilePath));
+    photo.hidden = !showPhoto;
+    placeholder.hidden = showPhoto;
+    if (showPhoto) {
+      photo.addEventListener("error", () => {
+        failedProfilePaths.add(profilePath);
+        photo.hidden = true;
+        placeholder.hidden = false;
+      }, { once: true });
+      photo.src = `https://image.tmdb.org/t/p/w185${profilePath}`;
+    }
+    fragment.append(row);
+  });
+  $("movie-cast").replaceChildren(fragment);
+  $("movie-cast").hidden = cast.length === 0;
+  $("movie-cast-empty").hidden = cast.length > 0;
+}
+
 function renderPicker() {
   const movie = movieById(state.draft.movieId);
   const food = foodById(state.draft.foodId);
@@ -493,13 +524,18 @@ function renderPicker() {
   $("movie-title").textContent = movie ? movie.title : "Tu pr\u00f3xima favorita te espera.";
   $("movie-meta").textContent = movie
     ? [movie.year ?? "A\u00f1o no disponible", movie.minutes ? `${movie.minutes} min` : "Duraci\u00f3n no disponible",
-      movie.custom ? "A\u00f1adida por ti" : null, movie.tmdbId && movie.rating !== null ? `TMDB ${movie.rating.toFixed(1)}/10` : null,
+      movie.custom ? "A\u00f1adida por ti" : null,
       movie.watched ? "Ya vista" : null].filter(Boolean).join(" \u00b7 ")
     : online ? "Un cat\u00e1logo entero por descubrir." : `${state.movies.length} pel\u00edculas en tu colecci\u00f3n.`;
   $("movie-description").textContent = movie ? movie.description : "Pulsa el bot\u00f3n y descubre qu\u00e9 ver esta noche.";
   const details = movie?.tmdbId ? movie : null;
+  $("movie-score").hidden = !details;
+  $("movie-score-value").textContent = details && details.rating !== null ? `${Math.round(details.rating * 10)}%` : "\u2014";
+  $("movie-score-votes").textContent = !details || details.rating === null ? "Sin puntuaci\u00f3n en TMDB"
+    : details.voteCount == null ? "TMDB \u00b7 Votos no disponibles"
+    : `TMDB \u00b7 ${details.voteCount.toLocaleString("es")} ${details.voteCount === 1 ? "voto" : "votos"}`;
   $("movie-credits").hidden = !details;
-  $("movie-cast").textContent = details?.cast.join(", ") || "Reparto no disponible";
+  renderCast(details);
   $("movie-directors").textContent = details?.directors.join(", ") || "Direcci\u00f3n no disponible";
   $("movie-genres").textContent = details?.genres.join(", ") || "G\u00e9neros no disponibles";
   $("movie-original-title").textContent = details?.originalTitle || "No disponible";

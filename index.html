@@ -64,6 +64,7 @@
 
       <!-- El generador y el formulario comparten una seleccion, guardada como borrador. -->
       <section id="planner" class="planner" aria-label="Crea tu movie night">
+        <div class="picker-controls">
           <div class="planner-toolbar">
             <span class="eyebrow">EL PLAN DE HOY</span>
             <details id="picker-options" class="picker-options">
@@ -91,6 +92,13 @@
               </div>
             </details>
           </div>
+          <div class="movie-picker-actions">
+            <button id="random-movie" class="button button-primary" type="button" aria-describedby="candidate-count"><svg class="icon" aria-hidden="true"><use href="#icon-shuffle"/></svg>Elegir pel&iacute;cula aleatoria</button>
+            <p id="candidate-count" class="helper">Descubre algo nuevo esta noche.</p>
+          </div>
+          <p id="picker-status" class="helper" role="status" aria-live="polite" hidden></p>
+          <button id="retry-movie" class="button button-text" type="button" hidden>Reintentar selecci&oacute;n</button>
+        </div>
 
           <div class="movie-feature">
             <div id="movie-art" class="movie-art" aria-hidden="true">
@@ -150,21 +158,19 @@
               <div aria-live="polite" aria-atomic="true">
                 <h2 id="movie-title" tabindex="-1">Tu pr&oacute;xima favorita te espera.</h2>
                 <p id="movie-meta" class="movie-meta">Un cat&aacute;logo entero por descubrir.</p>
+                <div id="movie-score" class="movie-score" hidden>
+                  <span id="movie-score-value" class="movie-score-value"></span>
+                  <div><p class="movie-score-label">Puntuaci&oacute;n de usuarios</p><p id="movie-score-votes" class="helper"></p></div>
+                </div>
                 <p id="movie-description" class="movie-description">Pulsa el bot&oacute;n y descubre qu&eacute; ver esta noche.</p>
                 <dl id="movie-credits" class="movie-credits" hidden>
-                  <div><dt>Reparto principal</dt><dd id="movie-cast"></dd></div>
+                  <div><dt>Reparto principal</dt><dd><ul id="movie-cast" class="cast-list" tabindex="0" aria-label="Reparto principal"></ul><p id="movie-cast-empty" hidden>Reparto no disponible</p></dd></div>
                   <div><dt>Direcci&oacute;n</dt><dd id="movie-directors"></dd></div>
                   <div><dt>G&eacute;neros</dt><dd id="movie-genres"></dd></div>
                   <div><dt>T&iacute;tulo original</dt><dd id="movie-original-title"></dd></div>
                 </dl>
               </div>
               <a id="movie-tmdb-link" class="text-link" target="_blank" rel="noopener noreferrer" hidden>Ficha en TMDB &rarr;</a>
-              <div class="movie-picker-actions">
-                <button id="random-movie" class="button button-primary" type="button"><svg class="icon"><use href="#icon-shuffle"/></svg>Elegir pel&iacute;cula aleatoria</button>
-                <p id="candidate-count" class="helper">Descubre algo nuevo esta noche.</p>
-              </div>
-              <p id="picker-status" class="helper" role="status" aria-live="polite" hidden></p>
-              <button id="retry-movie" class="button button-text" type="button" hidden>Reintentar selecci&oacute;n</button>
               <div class="food-line">
                 <svg class="icon"><use href="#icon-bowl"/></svg>
                 <div class="food-copy" aria-live="polite" aria-atomic="true">
@@ -261,6 +267,12 @@
     </main>
 
     <!-- Las plantillas se clonan y rellenan con textContent, incluso para titulos personalizados. -->
+    <template id="cast-member-template">
+      <li class="cast-member">
+        <div class="cast-photo-wrap"><span class="cast-placeholder">Sin foto</span><img class="cast-photo" alt="" width="84" height="126" loading="lazy" referrerpolicy="no-referrer" hidden></div>
+        <p class="cast-name"></p>
+      </li>
+    </template>
     <template id="catalog-row-template">
       <li class="catalog-card">
         <div class="catalog-poster-wrap"><span class="helper">Sin p&oacute;ster</span><img class="catalog-poster" alt="" width="92" height="138" loading="lazy" referrerpolicy="no-referrer" hidden></div>

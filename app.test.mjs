@@ -10,7 +10,8 @@ const movie = (id = 42, overrides = {}) => ({
   id: `tmdb-${id}`, tmdbId: id, title: `Movie ${id}`, genre: "sci-fi",
   year: 2024, minutes: 123, description: "A movie synopsis.", posterPath: "/poster.jpg",
   cast: ["Actor One", "Actor Two"], directors: ["Director"], genres: ["Science Fiction"],
-  originalTitle: `Original ${id}`, rating: 8.4, ...overrides,
+  castProfiles: [{ name: "Actor One", profilePath: "/actor-one.jpg" }, { name: "Actor Two", profilePath: null }],
+  originalTitle: `Original ${id}`, rating: 8.4, voteCount: 1250, ...overrides,
 });
 const page = (results, number = 1, totalPages = 1) => ({
   page: number, totalPages, totalResults: results.length * totalPages, results,
@@ -59,7 +60,7 @@ class Element {
 
 function app({ raw = null, config = "", fetch = async () => { throw new Error("Unexpected request"); } } = {}) {
   const nodes = new Map([...html.matchAll(/\bid="([^"]+)"/g)].map((match) => [match[1], new Element()]));
-  for (const id of ["movie-row-template", "plan-row-template", "catalog-row-template"]) {
+  for (const id of ["movie-row-template", "plan-row-template", "catalog-row-template", "cast-member-template"]) {
     nodes.get(id).content = { firstElementChild: new Element() };
   }
   const document = new Element();
@@ -99,6 +100,8 @@ test("fresh users get no fixed movie list and a clear setup state", () => {
   assert.equal(ui.nodes.get("api-setup-notice").hidden, false);
   assert.equal(ui.nodes.get("catalog-search").disabled, true);
   assert.equal(ui.nodes.get("random-movie").disabled, true);
+  assert.equal(ui.nodes.get("movie-score").hidden, true);
+  assert.equal(ui.nodes.get("movie-cast").hidden, true);
 });
 
 test("proxy config accepts HTTPS or loopback HTTP, never URL credentials or query tokens", () => {
@@ -120,27 +123,115 @@ test("TMDB details render, persist, and reload with long metadata and safe poste
   await ui.run("chooseCatalogMovie(result)");
   assert.equal(ui.run("state.movies.length"), 1);
   assert.equal(ui.nodes.get("movie-title").textContent, data.title);
-  assert.equal(ui.nodes.get("movie-cast").textContent, "Actor One, Actor Two");
+  const cast = ui.nodes.get("movie-cast").children;
+  assert.deepEqual(cast.map((row) => row.querySelector(".cast-name").textContent), data.cast);
+  assert.equal(cast[0].querySelector(".cast-photo").src, "https://image.tmdb.org/t/p/w185/actor-one.jpg");
+  assert.equal(cast[0].querySelector(".cast-photo").hidden, false);
+  assert.equal(cast[0].querySelector(".cast-placeholder").hidden, true);
+  assert.equal(cast[1].querySelector(".cast-photo").src, undefined);
+  assert.equal(cast[1].querySelector(".cast-photo").hidden, true);
+  assert.equal(cast[1].querySelector(".cast-placeholder").hidden, false);
   assert.equal(ui.nodes.get("movie-directors").textContent, "Director");
-  assert.match(ui.nodes.get("movie-meta").textContent, /2024.*123 min.*8.4/);
+  assert.match(ui.nodes.get("movie-meta").textContent, /2024.*123 min/);
+  assert.equal(ui.nodes.get("movie-score").hidden, false);
+  assert.equal(ui.nodes.get("movie-score-value").textContent, "84%");
+  assert.equal(ui.nodes.get("movie-score-votes").textContent, `TMDB \u00b7 ${(1250).toLocaleString("es")} votos`);
   assert.equal(ui.nodes.get("movie-poster").src, "https://image.tmdb.org/t/p/w500/poster.jpg");
   assert.equal(ui.run("isValidState(state)"), true);
   const reloaded = app({ raw: ui.storage.get("movie-night:v1") });
   assert.equal(reloaded.nodes.get("movie-title").textContent, data.title);
   assert.equal(reloaded.run("state.movies[0].tmdbId"), 42);
+  assert.equal(reloaded.nodes.get("movie-cast").children[0].querySelector(".cast-photo").src, cast[0].querySelector(".cast-photo").src);
+  assert.equal(reloaded.nodes.get("movie-score-value").textContent, "84%");
 });
 
 test("missing metadata and failed posters have explicit fallbacks", () => {
   const ui = app();
   ui.set("result", movie(42, { cast: [], directors: [], genres: [], minutes: null, year: null, rating: null }));
   ui.run("saveApiMovie(result); state.draft.movieId = result.id; renderPicker()");
-  assert.equal(ui.nodes.get("movie-cast").textContent, "Reparto no disponible");
+  assert.equal(ui.nodes.get("movie-cast").hidden, true);
+  assert.equal(ui.nodes.get("movie-cast-empty").hidden, false);
+  assert.equal(ui.nodes.get("movie-score-value").textContent, "\u2014");
+  assert.equal(ui.nodes.get("movie-score-votes").textContent, "Sin puntuaci\u00f3n en TMDB");
   assert.match(ui.nodes.get("movie-meta").textContent, /no disponible/);
   ui.nodes.get("movie-poster").listeners.error();
   assert.equal(ui.nodes.get("movie-poster").hidden, true);
   assert.equal(ui.nodes.get("movie-art").hidden, false);
   ui.set("unsafe", movie(43, { posterPath: "//evil.example/image.jpg" }));
   assert.equal(ui.run("isTmdbData(unsafe)"), false);
+});
+
+test("broken cast photos retain the name and a stable placeholder across re-renders", () => {
+  const ui = app();
+  ui.set("result", movie());
+  ui.run("saveApiMovie(result); selectMovie(result.id)");
+  const row = ui.nodes.get("movie-cast").children[0];
+  row.querySelector(".cast-photo").listeners.error();
+  assert.equal(row.querySelector(".cast-photo").hidden, true);
+  assert.equal(row.querySelector(".cast-placeholder").hidden, false);
+  assert.equal(row.querySelector(".cast-name").textContent, "Actor One");
+  ui.run("randomFood()");
+  const rendered = ui.nodes.get("movie-cast").children[0];
+  assert.equal(rendered.querySelector(".cast-photo").src, undefined);
+  assert.equal(rendered.querySelector(".cast-placeholder").hidden, false);
+});
+
+test("score handles zero, rounding, a single vote, and manual selections without stale details", () => {
+  const ui = app();
+  for (const [rating, score] of [[0, "0%"], [8.46, "85%"], [10, "100%"]]) {
+    ui.set("result", movie(42, { rating, voteCount: 1 }));
+    ui.run("saveApiMovie(result); selectMovie(result.id)");
+    assert.equal(ui.nodes.get("movie-score-value").textContent, score);
+    assert.equal(ui.nodes.get("movie-score-votes").textContent, "TMDB \u00b7 1 voto");
+  }
+  ui.run(`state.movies.push({ id: "custom", title: "My movie", genre: "cozy", year: null,
+    minutes: null, description: "My pick", watched: false, custom: true }); selectMovie("custom");`);
+  assert.equal(ui.nodes.get("movie-score").hidden, true);
+  assert.equal(ui.nodes.get("movie-credits").hidden, true);
+  assert.equal(ui.nodes.get("movie-cast").children.length, 0);
+});
+
+test("saved TMDB entries without profiles or vote counts still load and work offline", () => {
+  const ui = app();
+  ui.set("result", movie(42, { castProfiles: undefined, voteCount: undefined }));
+  ui.run("saveApiMovie(result); selectMovie(result.id)");
+  const reloaded = app({ raw: ui.storage.get("movie-night:v1") });
+  assert.equal(reloaded.run("isValidState(state)"), true);
+  assert.equal(reloaded.run("storageWritable"), true);
+  assert.equal(reloaded.nodes.get("movie-cast").children.length, 2);
+  assert.equal(reloaded.nodes.get("movie-cast").children[0].querySelector(".cast-placeholder").hidden, false);
+  assert.equal(reloaded.nodes.get("movie-score-value").textContent, "84%");
+  assert.equal(reloaded.nodes.get("movie-score-votes").textContent, "TMDB \u00b7 Votos no disponibles");
+});
+
+test("choosing an older saved movie in the catalog enriches profiles without losing watched status", async () => {
+  let requests = 0;
+  const ui = app({ fetch: async () => { requests++; return json({ movie: movie() }); } });
+  ui.set("legacy", movie(42, { castProfiles: undefined, voteCount: undefined }));
+  ui.set("result", movie());
+  ui.run("api.baseUrl = 'https://api.example.com'; saveApiMovie(legacy).watched = true; selectMovie(legacy.id)");
+  await ui.run("chooseCatalogMovie(result)");
+  assert.equal(requests, 1);
+  assert.equal(ui.run("state.movies.length"), 1);
+  assert.equal(ui.run("state.movies[0].watched"), true);
+  assert.equal(ui.run("state.movies[0].castProfiles[0].profilePath"), "/actor-one.jpg");
+  assert.equal(ui.run("isValidState(state)"), true);
+  await ui.run("chooseCatalogMovie(result)");
+  assert.equal(requests, 1);
+});
+
+test("invalid cast profiles and vote counts are rejected, including unsafe image paths", () => {
+  const ui = app();
+  for (const overrides of [
+    { castProfiles: null }, { castProfiles: "invalid" }, { castProfiles: [null] },
+    { castProfiles: [{ name: "Actor", profilePath: "//evil.example/photo.jpg" }] },
+    { castProfiles: [{ name: "", profilePath: "/photo.jpg" }] },
+    { castProfiles: Array.from({ length: 13 }, () => ({ name: "Actor", profilePath: null })) },
+    { voteCount: -1 }, { voteCount: 1.5 }, { voteCount: "100" },
+  ]) {
+    ui.set("result", movie(42, overrides));
+    assert.equal(ui.run("isTmdbData(result)"), false);
+  }
 });
 
 test("legacy collections, watched state, and plan references survive enrichment", () => {
@@ -273,6 +364,7 @@ test("selection failures keep the previous draft and cannot save a plan while lo
   ui.run("api.baseUrl = 'https://api.example.com'; saveApiMovie(existing); selectMovie(existing.id)");
   const selection = ui.run("chooseCatalogMovie(result)");
   assert.equal(ui.nodes.get("save-plan").disabled, true);
+  assert.equal(ui.nodes.get("random-movie").disabled, true);
   ui.run("savePlan()");
   assert.equal(ui.run("state.plans.length"), 0);
   pending.resolve(json({ error: "TMDB unavailable" }, 503));
@@ -280,6 +372,7 @@ test("selection failures keep the previous draft and cannot save a plan while lo
   assert.equal(ui.run("state.draft.movieId"), "tmdb-41");
   assert.equal(ui.nodes.get("retry-movie").hidden, false);
   assert.equal(ui.nodes.get("picker-status").textContent, "TMDB unavailable");
+  assert.equal(ui.nodes.get("random-movie").disabled, false);
 });
 
 test("cached collection choices and plan completion work without API access", () => {
@@ -301,7 +394,8 @@ test("the real proxy response contract works from catalog through saved movie de
     const data = {
       id: 42, title: "Live-shaped title", overview: "A synopsis", release_date: "2024-06-01",
       genre_ids: [878], poster_path: null, runtime: 120,
-      credits: { cast: [{ name: "An actor" }], crew: [{ name: "A director", job: "Director" }] },
+      vote_average: 7.6, vote_count: 321,
+      credits: { cast: [{ name: "An actor", profile_path: "/actor.jpg" }], crew: [{ name: "A director", job: "Director" }] },
     };
     return json(url.pathname === "/3/movie/42" ? data : {
       page: 1, total_pages: 1, total_results: 1, results: [data],
@@ -314,6 +408,10 @@ test("the real proxy response contract works from catalog through saved movie de
   await ui.run("loadCatalog()");
   await ui.run("chooseCatalogMovie(catalog.results[0])");
   assert.equal(ui.run("state.movies[0].title"), "Live-shaped title");
-  assert.equal(ui.nodes.get("movie-cast").textContent, "An actor");
+  const actor = ui.nodes.get("movie-cast").children[0];
+  assert.equal(actor.querySelector(".cast-name").textContent, "An actor");
+  assert.equal(actor.querySelector(".cast-photo").src, "https://image.tmdb.org/t/p/w185/actor.jpg");
+  assert.equal(ui.nodes.get("movie-score-value").textContent, "76%");
+  assert.equal(ui.nodes.get("movie-score-votes").textContent, "TMDB \u00b7 321 votos");
   assert.equal(ui.run("isValidState(state)"), true);
 });

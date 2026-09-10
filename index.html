@@ -93,7 +93,7 @@
             </details>
           </div>
           <div class="movie-picker-actions">
-            <button id="random-movie" class="button button-primary" type="button" aria-describedby="candidate-count"><svg class="icon" aria-hidden="true"><use href="#icon-shuffle"/></svg>Elegir pel&iacute;cula aleatoria</button>
+            <button id="random-movie" class="button button-primary" type="button" aria-describedby="candidate-count" aria-busy="false"><span id="random-movie-icon" class="random-movie-icon" aria-hidden="true"><svg class="icon"><use href="#icon-shuffle"/></svg></span><span id="random-movie-spinner" class="button-spinner" aria-hidden="true" hidden></span>Elegir pel&iacute;cula aleatoria</button>
             <p id="candidate-count" class="helper">Descubre algo nuevo esta noche.</p>
           </div>
           <p id="picker-status" class="helper" role="status" aria-live="polite" hidden></p>

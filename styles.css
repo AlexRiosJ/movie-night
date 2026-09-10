@@ -76,6 +76,10 @@ input[type="checkbox"], input[type="radio"] { width: 16px; height: 16px; margin:
 .button { display: inline-flex; justify-content: center; align-items: center; gap: 9px; min-height: 44px; padding: 11px 17px; border: 1px solid transparent; border-radius: 7px; font-size: 13px; font-weight: 600; line-height: 1.4; transition: background .15s; }
 .button-primary { background: var(--accent); color: #fff; }
 .button-primary:hover:not(:disabled) { background: var(--accent-hover); }
+.button[aria-busy="true"] { cursor: progress; opacity: .85; }
+.random-movie-icon, .button-spinner { width: 21px; height: 21px; flex-shrink: 0; }
+.button-spinner { border: 2px solid #ffffff70; border-top-color: currentColor; border-radius: 50%; animation: button-spin .8s linear infinite; }
+@keyframes button-spin { to { transform: rotate(360deg); } }
 .button-secondary { background: transparent; color: var(--ink); border-color: var(--border); }
 .button-secondary:hover:not(:disabled) { background: var(--surface); border-color: var(--muted); }
 .button-dark { background: var(--dark); color: #fff; }
@@ -135,7 +139,7 @@ h1 em { color: var(--accent); }
 .movie-score { display: flex; align-items: center; gap: 12px; margin-top: 16px; }
 .movie-score-value { display: grid; place-items: center; flex-shrink: 0; width: 62px; height: 62px; border: 2px solid var(--accent); border-radius: 50%; background: var(--accent-soft); color: var(--accent); font-size: 20px; font-weight: 750; }
 .movie-score-label { font-size: 12px; font-weight: 600; }
-#picker-status { margin-top: 12px; color: var(--accent); }
+#picker-status:not(.sr-only) { margin-top: 12px; color: var(--accent); }
 #movie-title { margin-top: 8px; font: 400 35px/1.2 Georgia, "Times New Roman", serif; letter-spacing: -.8px; overflow-wrap: anywhere; }
 .movie-meta { margin-top: 10px; color: var(--muted); font-size: 12px; }
 .movie-description { max-width: 58ch; margin-top: 13px; color: var(--muted); font-size: 14px; line-height: 1.75; overflow-wrap: anywhere; }

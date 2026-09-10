@@ -37,7 +37,7 @@ let selectionController;
 let selectionRetry;
 let pickerMessage = "";
 let failedPosterPath = null;
-const failedProfilePaths = new Set();
+let renderedCastKey;
 
 function readApiConfig() {
   const base = window.MOVIE_NIGHT_CONFIG?.apiBaseUrl;
@@ -488,20 +488,23 @@ function selectMovie(id) {
 }
 
 function renderCast(movie) {
-  const fragment = document.createDocumentFragment();
   const cast = movie?.cast ?? [];
+  const key = JSON.stringify([movie?.id, cast, movie?.castProfiles]);
+  // Keep in-flight images and horizontal scroll intact when only picker status or food changes.
+  if (key === renderedCastKey) return;
+  renderedCastKey = key;
+  const fragment = document.createDocumentFragment();
   cast.forEach((name) => {
     const row = $("cast-member-template").content.firstElementChild.cloneNode(true);
     row.querySelector(".cast-name").textContent = name;
     const profilePath = movie.castProfiles?.find((person) => person.name === name)?.profilePath;
     const photo = row.querySelector(".cast-photo");
     const placeholder = row.querySelector(".cast-placeholder");
-    const showPhoto = Boolean(profilePath && !failedProfilePaths.has(profilePath));
+    const showPhoto = Boolean(profilePath);
     photo.hidden = !showPhoto;
     placeholder.hidden = showPhoto;
     if (showPhoto) {
       photo.addEventListener("error", () => {
-        failedProfilePaths.add(profilePath);
         photo.hidden = true;
         placeholder.hidden = false;
       }, { once: true });
@@ -562,14 +565,17 @@ function renderPicker() {
     ? `${count} ${count === 1 ? "pel\u00edcula" : "pel\u00edculas"} en el bombo`
     : "Sin opciones. Abre Preferencias o a\u00f1ade una peli en Mi colecci\u00f3n.";
   $("random-movie").disabled = busy || (online ? !api.baseUrl : count === 0);
+  $("random-movie").setAttribute("aria-busy", String(busy));
+  $("random-movie-icon").hidden = busy;
+  $("random-movie-spinner").hidden = !busy;
+  $("picker-status").className = busy ? "sr-only" : "helper";
   $("picker-status").hidden = !pickerMessage;
   $("picker-status").textContent = pickerMessage;
   $("retry-movie").hidden = !selectionRetry || busy;
   $("food-name").textContent = food ? food.name : "Comida por elegir";
   $("food-description").textContent = food ? food.description : "Porque una buena peli merece un buen bocado.";
   $("save-plan").disabled = busy || !movie || !food;
-  $("plan-hint").textContent = busy ? "Espera a que termine de cargar la pel\u00edcula."
-    : movie && food ? "Pon fecha y lugar. Lo dem\u00e1s ya est\u00e1." : "Elige una peli y una comida para empezar.";
+  $("plan-hint").textContent = movie && food ? "Pon fecha y lugar. Lo dem\u00e1s ya est\u00e1." : "Elige una peli y una comida para empezar.";
 }
 
 function normalizedTitle(title) {

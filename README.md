@@ -137,6 +137,9 @@ under a custom domain; update the Worker origin allowlist when changing domains.
 - The random-pick button sits above the movie details in a sticky control bar,
   so changing the title or synopsis length does not move it. It stays visible
   while scrolling through the planner, with a full-width button on small screens.
+  Loading replaces its shuffle icon with a spinner, without adding visible text
+  or resizing the controls. Screen readers still announce loading; errors and
+  their retry action remain visible.
 - **Elegir pelicula aleatoria** uses TMDB by default when configured. It samples
   different discovery pages, avoids the current movie, and respects your universe
   and watched filter. Discovery includes released movies with at least 50 votes,

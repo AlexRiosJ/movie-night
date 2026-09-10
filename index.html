@@ -47,11 +47,6 @@
           <span id="party-trigger-warning" class="party-trigger-warning" aria-hidden="true" hidden>!</span>
         </button>
         <div class="appearance-controls" role="group" aria-label="Preferencias de la app" data-en-aria-label="App preferences">
-          <button id="color-mode-toggle" class="color-mode-toggle" type="button" aria-label="Modo oscuro" aria-pressed="false" title="Cambiar a modo oscuro">
-            <svg class="icon small mode-sun" aria-hidden="true"><use href="#icon-sun"/></svg>
-            <svg class="icon small mode-moon" aria-hidden="true"><use href="#icon-moon"/></svg>
-            <span id="color-mode-label">Claro</span>
-          </button>
           <div class="theme-control">
             <button id="theme-toggle" class="theme-toggle" type="button" aria-expanded="false" aria-controls="theme-menu">
               <span class="theme-dot" aria-hidden="true"></span>
@@ -68,6 +63,14 @@
           <details id="picker-options" class="picker-options header-preferences">
             <summary><span data-en="Preferences">Preferencias</span> <svg class="icon small"><use href="#icon-chevron"/></svg></summary>
             <div class="picker-filters">
+              <div class="mode-preference">
+                <span data-en="Color mode">Modo de color</span>
+                <button id="color-mode-toggle" class="color-mode-toggle" type="button" aria-label="Modo oscuro" aria-pressed="false" title="Cambiar a modo oscuro">
+                  <svg class="icon small mode-sun" aria-hidden="true"><use href="#icon-sun"/></svg>
+                  <svg class="icon small mode-moon" aria-hidden="true"><use href="#icon-moon"/></svg>
+                  <span id="color-mode-label">Claro</span>
+                </button>
+              </div>
               <label for="catalog-language"><span data-en="App language">Idioma de la app</span>
                 <select id="catalog-language" aria-describedby="catalog-language-hint">
                   <option value="es-ES" lang="es">Espa&ntilde;ol</option>
@@ -114,6 +117,13 @@
         <h1><span data-en="A movie.">Una pel&iacute;cula.</span> <em data-en="A great plan.">Un buen plan.</em></h1>
         <p data-en="Discover what to watch and plan your next movie night.">Descubre qu&eacute; ver y organiza tu pr&oacute;xima sesi&oacute;n.</p>
       </header>
+
+      <form id="catalog-form" class="catalog-form" role="search">
+        <label for="catalog-query"><span data-en="Search movies">Buscar pel&iacute;culas</span><input id="catalog-query" type="search" maxlength="120" placeholder="T&iacute;tulo de la pel&iacute;cula" data-en-placeholder="Movie title" aria-describedby="catalog-help"></label>
+        <label for="catalog-genre"><span data-en="Genre">G&eacute;nero</span><select id="catalog-genre"><option value="all" data-en="All genres">Todos los g&eacute;neros</option><option value="spooky" data-en="Horror and mystery">Terror y misterio</option><option value="cozy" data-en="Comedy, romance, and family">Comedia, romance y familia</option><option value="sci-fi" data-en="Science fiction">Ciencia ficci&oacute;n</option><option value="fantasy" data-en="Fantasy">Fantas&iacute;a</option><option value="general" data-en="Other genres">Otros g&eacute;neros</option></select></label>
+        <button id="catalog-search" class="button button-primary" type="submit" data-en="Search">Buscar</button>
+      </form>
+      <p id="catalog-help" class="helper catalog-help">Sin t&iacute;tulo, descubre pel&iacute;culas populares por g&eacute;nero. La b&uacute;squeda por t&iacute;tulo incluye todos los g&eacute;neros. Elegir una peli la guarda en tu colecci&oacute;n.</p>
 
       <!-- El generador y el formulario comparten una seleccion, guardada como borrador. -->
       <section id="planner" class="planner" aria-label="Crea tu movie night" data-en-aria-label="Create your movie night">
@@ -214,6 +224,9 @@
                 </dl>
               </div>
               <a id="movie-tmdb-link" class="text-link" target="_blank" rel="noopener noreferrer" hidden data-en="View on TMDB →">Ficha en TMDB &rarr;</a>
+              <div class="movie-save-action">
+                <button id="add-selected-movie" class="button button-secondary" type="button" hidden>A&ntilde;adir a mi colecci&oacute;n</button>
+              </div>
               <div class="food-line">
                 <svg class="icon"><use href="#icon-bowl"/></svg>
                 <div class="food-copy" aria-live="polite" aria-atomic="true">
@@ -247,12 +260,6 @@
         </div>
         <section id="catalog" aria-labelledby="catalog-heading" hidden>
           <h2 id="catalog-heading" class="sr-only" data-en="Explore the TMDB catalog">Explorar el cat&aacute;logo de TMDB</h2>
-          <form id="catalog-form" class="catalog-form" role="search">
-            <label for="catalog-query"><span data-en="Search movies">Buscar pel&iacute;culas</span><input id="catalog-query" type="search" maxlength="120" placeholder="T&iacute;tulo de la pel&iacute;cula" data-en-placeholder="Movie title" aria-describedby="catalog-help"></label>
-            <label for="catalog-genre"><span data-en="Genre">G&eacute;nero</span><select id="catalog-genre"><option value="all" data-en="All genres">Todos los g&eacute;neros</option><option value="spooky" data-en="Horror and mystery">Terror y misterio</option><option value="cozy" data-en="Comedy, romance, and family">Comedia, romance y familia</option><option value="sci-fi" data-en="Science fiction">Ciencia ficci&oacute;n</option><option value="fantasy" data-en="Fantasy">Fantas&iacute;a</option><option value="general" data-en="Other genres">Otros g&eacute;neros</option></select></label>
-            <button id="catalog-search" class="button button-primary" type="submit" data-en="Search">Buscar</button>
-          </form>
-          <p id="catalog-help" class="helper">Sin t&iacute;tulo, descubre pel&iacute;culas populares por g&eacute;nero. La b&uacute;squeda por t&iacute;tulo incluye todos los g&eacute;neros. Elegir una peli la guarda en tu colecci&oacute;n.</p>
           <p id="catalog-status" class="catalog-status helper" role="status" aria-live="polite"></p>
           <button id="catalog-retry" class="button button-secondary" type="button" hidden data-en="Retry">Reintentar</button>
           <ul id="catalog-list" class="catalog-list" aria-label="Resultados de TMDB" data-en-aria-label="TMDB results" aria-busy="false"></ul>

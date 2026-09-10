@@ -56,6 +56,7 @@ const catalog = { query: "", genre: "all", language: "es-ES", page: 1, totalPage
 let catalogController;
 let selectionController;
 let selectionRetry;
+let previewMovie = null;
 let pickerMessage = "";
 let failedPosterPath = null;
 let renderedCastKey;
@@ -337,7 +338,7 @@ function renderLanguageStatus() {
   $("language-retry").hidden = !localizationFailures.size || Boolean(localizationController);
 }
 
-// The original hook also refreshes collections and plans. Only saved TMDB entries are fetched.
+// Refresh the preview as well as saved collections and plans.
 async function refreshSelectedLanguage({ retry = false } = {}) {
   const context = syncLocalizationContext();
   if (localizationController) {
@@ -347,7 +348,8 @@ async function refreshSelectedLanguage({ retry = false } = {}) {
   }
   if (retry) localizationFailures.clear();
   const language = catalogLanguage();
-  const missing = state.movies.filter((movie) => movie.tmdbId
+  const movies = previewMovie ? [previewMovie, ...state.movies.filter((movie) => movie.tmdbId !== previewMovie.tmdbId)] : state.movies;
+  const missing = movies.filter((movie) => movie.tmdbId
     && (moviePresentation(movie).language ?? "es-ES") !== language);
   const missingIds = new Set(missing.map((movie) => movie.tmdbId));
   for (const id of localizationFailures.keys()) {
@@ -387,7 +389,7 @@ async function refreshSelectedLanguage({ retry = false } = {}) {
       try {
         const details = await fetchMovieDetails(movie.tmdbId, controller.signal, language);
         if (!current()) return;
-        if (movieById(movie.id)?.tmdbId === movie.tmdbId) {
+        if (movieById(movie.id)?.tmdbId === movie.tmdbId || previewMovie?.tmdbId === movie.tmdbId) {
           localizedMovies.set(`${details.tmdbId}:${language}`, details);
           preserveRenderedFocus(() => {
             renderPicker();
@@ -397,7 +399,7 @@ async function refreshSelectedLanguage({ retry = false } = {}) {
         }
       } catch (error) {
         if (!current()) return;
-        if (movieById(movie.id)?.tmdbId === movie.tmdbId) {
+        if (movieById(movie.id)?.tmdbId === movie.tmdbId || previewMovie?.tmdbId === movie.tmdbId) {
           localizationFailures.set(movie.tmdbId, apiErrorMessage(error));
         }
       }
@@ -597,7 +599,7 @@ function cancelSelection({ preserveMessage = false } = {}) {
   }
 }
 
-async function selectFromApi(loadMovie, retry, { genre = null, forceFood = false, focus = false } = {}) {
+async function selectFromApi(loadMovie, retry, { genre = null, forceFood = false, focus = false, previewOnly = false, chooseFood = true } = {}) {
   if (sharedBusy()) {
     notify(["Espera a que termine la operaci\u00f3n de la party.", "Wait for the party operation to finish."]);
     return;
@@ -613,7 +615,9 @@ async function selectFromApi(loadMovie, retry, { genre = null, forceFood = false
   try {
     movie = await loadMovie(controller.signal);
     if (controller.signal.aborted) return;
-    if (party.session) {
+    if (previewOnly) {
+      savedMovie = savedApiMovie(movie);
+    } else if (party.session) {
       const snapshot = await writeParty("/movies", "POST", {
         movie: { ...movie, genre: genre ?? movie.genre, watched: false, custom: false },
       });
@@ -641,8 +645,9 @@ async function selectFromApi(loadMovie, retry, { genre = null, forceFood = false
   selectionController = null;
   pickerMessage = "";
   localizedMovies.set(`${movie.tmdbId}:${movie.language}`, movie);
-  state.draft.movieId = savedMovie.id;
-  if (forceFood || state.preferences.autoFood) state.draft.foodId = pickRandom(FOODS, state.draft.foodId).id;
+  previewMovie = previewOnly ? { ...movie, genre: savedMovie?.genre ?? genre ?? movie.genre, watched: savedMovie?.watched ?? false } : null;
+  state.draft.movieId = savedMovie?.id ?? null;
+  if (chooseFood && (forceFood || state.preferences.autoFood)) state.draft.foodId = pickRandom(FOODS, state.draft.foodId).id;
   const saved = persistState();
   renderPicker();
   renderMovies();
@@ -652,9 +657,19 @@ async function selectFromApi(loadMovie, retry, { genre = null, forceFood = false
     $("planner").scrollIntoView({ block: "start" });
     $("movie-title").focus({ preventScroll: true });
   }
+  if (previewOnly) {
+    notify([`${movie.title}: vista previa, sin a\u00f1adir a la lista.`, `${movie.title}: preview, not added to the list.`]);
+    return;
+  }
   const title = moviePresentation(savedMovie).title;
   notify(saved || party.session ? [`${title}: lista para tu pr\u00f3ximo plan.`, `${title}: ready for your next plan.`]
     : ["Pel\u00edcula elegida solo para esta sesi\u00f3n.", "Movie selected for this session only."]);
+}
+
+function addPreviewMovie() {
+  if (!previewMovie || selectionController || sharedBusy()) return;
+  const movie = moviePresentation(previewMovie);
+  return selectFromApi(async () => movie, addPreviewMovie, { genre: movie.genre, chooseFood: false });
 }
 
 function chooseCatalogMovie(movie) {
@@ -677,7 +692,7 @@ async function randomApiMovie(signal) {
   const { genre, pendingOnly } = state.preferences;
   const firstPage = await fetchCatalogPage("", genre, 1, signal);
   const remainingPages = Array.from({ length: firstPage.totalPages }, (_, index) => index + 1);
-  const previous = movieById(state.draft.movieId);
+  const previous = previewMovie ?? movieById(state.draft.movieId);
   // Sample different pages, not just the first popular results. Bound retries for watched-heavy collections.
   for (let attempt = 0; attempt < 5 && remainingPages.length; attempt += 1) {
     const index = Math.floor(Math.random() * remainingPages.length);
@@ -704,7 +719,7 @@ function pickRandom(items, previousId) {
 function randomMovie(forceFood = false) {
   if (movieSource() === "catalog") {
     return selectFromApi(randomApiMovie, () => randomMovie(forceFood), {
-      genre: state.preferences.genre === "all" ? null : state.preferences.genre, forceFood,
+      genre: state.preferences.genre === "all" ? null : state.preferences.genre, forceFood, previewOnly: true,
     });
   }
   cancelSelection();
@@ -714,6 +729,7 @@ function randomMovie(forceFood = false) {
       "No movies match these filters. Change genre, include watched movies, or add a new one."]);
     return null;
   }
+  previewMovie = null;
   state.draft.movieId = movie.id;
   if (forceFood || state.preferences.autoFood) {
     state.draft.foodId = pickRandom(FOODS, state.draft.foodId).id;
@@ -742,6 +758,7 @@ function selectMovie(id) {
     notify(["No se encontr\u00f3 esa pel\u00edcula. Vuelve a elegir una de tu colecci\u00f3n.", "That movie was not found. Choose another from your collection."]);
     return;
   }
+  previewMovie = null;
   state.draft.movieId = id;
   if (state.preferences.autoFood) state.draft.foodId = pickRandom(FOODS, state.draft.foodId).id;
   persistState();
@@ -784,7 +801,8 @@ function renderCast(movie) {
 }
 
 function renderPicker() {
-  const movie = moviePresentation(movieById(state.draft.movieId));
+  const savedMovie = movieById(state.draft.movieId);
+  const movie = moviePresentation(previewMovie ?? savedMovie);
   const food = foodById(state.draft.foodId);
   const count = candidates().length;
   const online = movieSource() === "catalog";
@@ -846,10 +864,18 @@ function renderPicker() {
   $("picker-status").hidden = !pickerMessage;
   $("picker-status").textContent = localizedText(pickerMessage);
   $("retry-movie").hidden = !selectionRetry || busy;
+  $("add-selected-movie").hidden = !movie;
+  $("add-selected-movie").disabled = busy || Boolean(savedMovie);
+  $("add-selected-movie").textContent = savedMovie
+    ? t("Ya est\u00e1 en la lista", "Already in the list")
+    : party.session ? t("A\u00f1adir a la colecci\u00f3n del grupo", "Add to the group's collection")
+      : t("A\u00f1adir a mi colecci\u00f3n", "Add to my collection");
   $("food-name").textContent = food ? food.name : t("Comida por elegir", "Food to choose");
   $("food-description").textContent = food ? food.description : t("Porque una buena peli merece un buen bocado.", "Because a good movie deserves a good bite.");
-  $("save-plan").disabled = busy || !movie || !food;
-  $("plan-hint").textContent = movie && food ? t("Pon fecha y lugar. Lo dem\u00e1s ya est\u00e1.", "Set a date and place. Everything else is ready.")
+  $("save-plan").disabled = busy || !savedMovie || !food;
+  $("plan-hint").textContent = movie && !savedMovie
+    ? t("A\u00f1ade la pel\u00edcula a la lista antes de guardar un plan.", "Add the movie to the list before saving a plan.")
+    : movie && food ? t("Pon fecha y lugar. Lo dem\u00e1s ya est\u00e1.", "Set a date and place. Everything else is ready.")
     : t("Elige una peli y una comida para empezar.", "Choose a movie and food to get started.");
 }
 
@@ -1213,6 +1239,7 @@ function renderAll({ preserveFormValues = false } = {}) {
 
 // Delegated list events continue working after templates are re-rendered.
 $("random-movie").addEventListener("click", () => randomMovie());
+$("add-selected-movie").addEventListener("click", addPreviewMovie);
 $("catalog-language").addEventListener("change", (event) => changeCatalogLanguage(event.target.value));
 $("language-retry").addEventListener("click", () => refreshSelectedLanguage({ retry: true }));
 $("random-food").addEventListener("click", randomFood);
@@ -1252,6 +1279,10 @@ $("catalog-form").addEventListener("submit", (event) => {
   catalog.query = $("catalog-query").value.trim();
   catalog.genre = $("catalog-genre").value;
   loadCatalog();
+  state.preferences.view = "catalog";
+  persistState();
+  renderOrganizer();
+  $("catalog").scrollIntoView({ block: "start" });
 });
 $("catalog-previous").addEventListener("click", () => loadCatalog(catalog.page - 1));
 $("catalog-next").addEventListener("click", () => loadCatalog(catalog.page + 1));
@@ -1376,6 +1407,7 @@ window.addEventListener("storage", (event) => {
     return;
   }
   cancelSelection();
+  previewMovie = null;
   state = updated;
   storageWritable = true;
   $("storage-notice").hidden = true;

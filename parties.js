@@ -209,6 +209,7 @@ async function refreshParty() {
 
 function activateParty(session, snapshot = null) {
   cancelSelection();
+  previewMovie = null;
   clearTimeout(party.timer);
   if (!party.session) party.localState = state;
   else if (!party.loading) persistPartyView();
@@ -242,6 +243,7 @@ function leaveParty() {
     return;
   }
   cancelSelection();
+  previewMovie = null;
   clearTimeout(party.timer);
   if (party.session) {
     if (!party.loading) persistPartyView();

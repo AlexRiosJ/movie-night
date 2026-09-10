@@ -17,6 +17,12 @@ const GENRE_NAMES = {
   27: "Terror", 10402: "M\u00fasica", 9648: "Misterio", 10749: "Romance",
   878: "Ciencia ficci\u00f3n", 10770: "Pel\u00edcula de TV", 53: "Suspense", 10752: "B\u00e9lica", 37: "Western",
 };
+const ENGLISH_GENRE_NAMES = {
+  28: "Action", 12: "Adventure", 16: "Animation", 35: "Comedy", 80: "Crime",
+  99: "Documentary", 18: "Drama", 10751: "Family", 14: "Fantasy", 36: "History",
+  27: "Horror", 10402: "Music", 9648: "Mystery", 10749: "Romance",
+  878: "Science Fiction", 10770: "TV Movie", 53: "Thriller", 10752: "War", 37: "Western",
+};
 
 class HttpError extends Error {
   constructor(status, message, retryAfter = null) {
@@ -67,7 +73,7 @@ function movieMood(genreIds, keywords) {
   return "general";
 }
 
-export function normalizeMovie(data, mood = null) {
+export function normalizeMovie(data, mood = null, language = "es-ES") {
   if (!isRecord(data) || !positiveId(data.id) || !text(data.title, 300)
     || (data.adult !== undefined && typeof data.adult !== "boolean")) throw invalidUpstream();
   if (data.adult) throw new HttpError(404, "Esta pel\u00edcula no est\u00e1 disponible en el cat\u00e1logo.");
@@ -85,14 +91,16 @@ export function normalizeMovie(data, mood = null) {
   const year = typeof data.release_date === "string" && /^\d{4}-\d{2}-\d{2}$/.test(data.release_date)
     ? Number(data.release_date.slice(0, 4)) : null;
   const voteCount = Number.isSafeInteger(data.vote_count) && data.vote_count >= 0 ? data.vote_count : null;
+  const genreNames = language === "en-US" ? ENGLISH_GENRE_NAMES : GENRE_NAMES;
   return {
     id: `tmdb-${data.id}`,
     tmdbId: data.id,
+    language,
     title: text(data.title, 300),
     genre: mood ?? movieMood(genreIds, keywords),
     year: year >= 1888 && year <= 2200 ? year : null,
     minutes: Number.isInteger(data.runtime) && data.runtime > 0 && data.runtime <= 1000 ? data.runtime : null,
-    description: text(data.overview, 6000) || "Sin sinopsis disponible.",
+    description: text(data.overview, 6000) || (language === "en-US" ? "No synopsis available." : "Sin sinopsis disponible."),
     posterPath: imagePath(data.poster_path),
     cast: principalCast,
     castProfiles: principalCast.map((name) => ({
@@ -100,7 +108,7 @@ export function normalizeMovie(data, mood = null) {
       profilePath: imagePath(cast.find((person) => text(person.name, 120) === name).profile_path),
     })),
     directors: names(crew.filter((person) => person.job === "Director"), 6, 120),
-    genres: genres.length ? names(genres, 20, 80) : [...new Set(genreIds.map((id) => GENRE_NAMES[id]).filter(Boolean))].slice(0, 20),
+    genres: genres.length ? names(genres, 20, 80) : [...new Set(genreIds.map((id) => genreNames[id]).filter(Boolean))].slice(0, 20),
     originalTitle: text(data.original_title, 300),
     voteCount,
     rating: Number.isFinite(data.vote_average) && data.vote_average >= 0 && data.vote_average <= 10
@@ -109,8 +117,12 @@ export function normalizeMovie(data, mood = null) {
 }
 
 function parseRoute(url) {
+  const language = url.searchParams.get("language") ?? "es-ES";
+  if (!["es-ES", "en-US"].includes(language) || url.searchParams.getAll("language").length > 1) {
+    throw new HttpError(400, "El idioma debe ser es-ES o en-US.");
+  }
   if (url.pathname === "/movies") {
-    const permitted = new Set(["query", "genre", "page"]);
+    const permitted = new Set(["query", "genre", "page", "language"]);
     for (const key of url.searchParams.keys()) {
       if (!permitted.has(key) || url.searchParams.getAll(key).length !== 1) {
         throw new HttpError(400, "Par\u00e1metros de b\u00fasqueda no v\u00e1lidos.");
@@ -124,18 +136,19 @@ function parseRoute(url) {
       || !Object.hasOwn(MOOD_FILTERS, genre) || !/^[1-9]\d{0,2}$/.test(rawPage) || Number(rawPage) > 500) {
       throw new HttpError(400, "El t\u00edtulo, universo o n\u00famero de p\u00e1gina no es v\u00e1lido.");
     }
-    return { type: "list", query, genre: query ? "all" : genre, page: Number(rawPage) };
+    return { type: "list", query, genre: query ? "all" : genre, page: Number(rawPage), language };
   }
   const match = /^\/movies\/([1-9]\d*)$/.exec(url.pathname);
-  if (match && positiveId(Number(match[1])) && !url.search) {
-    return { type: "detail", id: Number(match[1]) };
+  if (match && positiveId(Number(match[1])) && [...url.searchParams.keys()].every((key) => key === "language")) {
+    return { type: "detail", id: Number(match[1]), language };
   }
   throw new HttpError(404, "Ruta no disponible.");
 }
 
 async function tmdbRequest(route, token) {
   const url = new URL(`${TMDB_BASE}${route.type === "detail" ? `/movie/${route.id}` : route.query ? "/search/movie" : "/discover/movie"}`);
-  url.searchParams.set("language", "es-ES");
+  // TMDB localizes poster_path as well as text using this language, with its own image fallback.
+  url.searchParams.set("language", route.language);
   if (route.type === "detail") {
     url.searchParams.set("append_to_response", "credits,keywords");
   } else {
@@ -183,7 +196,7 @@ async function movieResponse(route, token) {
   const data = await tmdbRequest(route, token);
   if (route.type === "detail") {
     if (!isRecord(data) || data.id !== route.id) throw invalidUpstream();
-    return { movie: normalizeMovie(data) };
+    return { movie: normalizeMovie(data, null, route.language) };
   }
   if (!isRecord(data) || !Array.isArray(data.results) || data.results.length > 20
     || data.page !== route.page || !Number.isSafeInteger(data.total_pages) || data.total_pages < 0
@@ -195,7 +208,7 @@ async function movieResponse(route, token) {
     results: data.results.filter((movie) => {
       if (!isRecord(movie)) throw invalidUpstream();
       return movie.adult !== true;
-    }).map((movie) => normalizeMovie(movie, route.genre === "all" ? null : route.genre)),
+    }).map((movie) => normalizeMovie(movie, route.genre === "all" ? null : route.genre, route.language)),
   };
 }
 
@@ -249,6 +262,7 @@ export default {
       }
       const cacheUrl = new URL(request.url);
       cacheUrl.search = "";
+      cacheUrl.searchParams.set("language", route.language);
       if (route.type === "list") {
         cacheUrl.searchParams.set("query", route.query);
         cacheUrl.searchParams.set("genre", route.genre);

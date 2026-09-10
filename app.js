@@ -3,6 +3,7 @@
 const STORAGE_KEY = "movie-night:v1";
 const THEMES = { movie: "Movie", arcade: "Arcade", zine: "Zine" };
 const COLOR_MODES = { light: "Claro", dark: "Oscuro" };
+const CATALOG_LANGUAGES = { "es-ES": "Espa\u00f1ol", "en-US": "English" };
 const LEGACY_THEMES = ["light", "night", "spooky", "cozy", "sci-fi", "fantasy", "christmas"];
 // Category IDs stay compatible with saved collections and the deployed TMDB proxy.
 const MOVIE_GENRES = {
@@ -27,13 +28,14 @@ const $ = (id) => document.getElementById(id);
 let storageWritable = true;
 let toastTimer;
 const api = readApiConfig();
-const catalog = { query: "", genre: "all", page: 1, totalPages: 0, results: [], loaded: false, loading: false, error: "" };
+const catalog = { query: "", genre: "all", language: "es-ES", page: 1, totalPages: 0, results: [], loaded: false, loading: false, error: "" };
 let catalogController;
 let selectionController;
 let selectionRetry;
 let pickerMessage = "";
 let failedPosterPath = null;
 let renderedCastKey;
+const localizedMovies = new Map();
 
 function readApiConfig() {
   const base = window.MOVIE_NIGHT_CONFIG?.apiBaseUrl;
@@ -63,7 +65,7 @@ function freshState() {
     theme: "movie",
     colorMode: "light",
     draft: { movieId: null, foodId: null, date: localToday(), place: "" },
-    preferences: { genre: "all", pendingOnly: true, autoFood: true, movieTab: "pending", planTab: "scheduled", view: "catalog" },
+    preferences: { genre: "all", language: "es-ES", pendingOnly: true, autoFood: true, movieTab: "pending", planTab: "scheduled", view: "catalog" },
   };
 }
 
@@ -111,6 +113,7 @@ function isMovieData(movie) {
 
 function isTmdbData(movie) {
   return isMovieData(movie) && Number.isSafeInteger(movie.tmdbId) && movie.tmdbId > 0
+    && (movie.language === undefined || isCatalogLanguage(movie.language))
     && isImagePath(movie.posterPath) && isStringList(movie.cast, 12, 120)
     && (movie.castProfiles === undefined || (Array.isArray(movie.castProfiles) && movie.castProfiles.length <= 12
       && movie.castProfiles.every((person) => isRecord(person) && isText(person.name, 120) && isImagePath(person.profilePath))))
@@ -149,6 +152,7 @@ function isValidState(value) {
     && (draft.date === "" || isValidDate(draft.date))
     && typeof draft.place === "string" && draft.place.length <= 120
     && (preferences.genre === "all" || isGenre(preferences.genre) || preferences.genre === "christmas")
+    && (preferences.language === undefined || isCatalogLanguage(preferences.language))
     && typeof preferences.pendingOnly === "boolean" && typeof preferences.autoFood === "boolean"
     && ["pending", "watched"].includes(preferences.movieTab)
     && ["scheduled", "completed"].includes(preferences.planTab)
@@ -187,6 +191,7 @@ function migrateStoredState(value) {
   if (LEGACY_THEMES.includes(value.theme)) value.theme = "movie";
   value.movies = value.movies.map(normalizeMovieGenre);
   if (value.preferences.genre === "christmas") value.preferences.genre = "all";
+  value.preferences.language ??= "es-ES";
   return value;
 }
 
@@ -241,12 +246,90 @@ function movieSource() {
   return state.preferences.source ?? (api.baseUrl ? "catalog" : "collection");
 }
 
+function isCatalogLanguage(value) {
+  return typeof value === "string" && Object.hasOwn(CATALOG_LANGUAGES, value);
+}
+
+function catalogLanguage() {
+  return state.preferences.language ?? "es-ES";
+}
+
+// Alternate metadata is a local presentation, never a write to another member's movie.
+function moviePresentation(movie) {
+  if (!party.session || !movie?.tmdbId || (movie.language ?? "es-ES") === catalogLanguage()) return movie;
+  const localized = localizedMovies.get(`${movie.tmdbId}:${catalogLanguage()}`);
+  if (!localized) return movie;
+  const { title, description, posterPath, genres, language } = localized;
+  return { ...movie, title, description, posterPath, genres, language };
+}
+
+function syncCatalogLanguage() {
+  $("catalog-language").value = catalogLanguage();
+  if (catalog.language === catalogLanguage()) return;
+  cancelSelection();
+  catalogController?.abort();
+  catalogController = null;
+  Object.assign(catalog, { language: catalogLanguage(), page: 1, totalPages: 0,
+    results: [], loaded: false, loading: false, error: "" });
+}
+
+async function refreshSelectedLanguage() {
+  const movie = moviePresentation(movieById(state.draft.movieId));
+  if (!api.baseUrl || !movie?.tmdbId || (movie.language ?? "es-ES") === catalogLanguage()) return;
+  cancelSelection();
+  const controller = new AbortController();
+  selectionController = controller;
+  pickerMessage = "Actualizando el idioma de la ficha\u2026";
+  renderPicker();
+  try {
+    const details = await fetchMovieDetails(movie.tmdbId, controller.signal);
+    if (controller.signal.aborted) return;
+    localizedMovies.set(`${details.tmdbId}:${details.language}`, details);
+    if (!party.session) {
+      saveApiMovie(details);
+      persistState();
+    }
+  } catch (error) {
+    if (controller.signal.aborted) return;
+    pickerMessage = apiErrorMessage(error);
+    selectionRetry = refreshSelectedLanguage;
+  } finally {
+    if (selectionController === controller) {
+      selectionController = null;
+      if (!selectionRetry) pickerMessage = "";
+      renderPicker();
+      renderMovies();
+      renderPlans();
+    }
+  }
+}
+
+function changeCatalogLanguage(language) {
+  if (!isCatalogLanguage(language)) {
+    $("catalog-language").value = catalogLanguage();
+    notify("Elige un idioma de cat\u00e1logo v\u00e1lido.");
+    return;
+  }
+  if (sharedBusy()) {
+    $("catalog-language").value = catalogLanguage();
+    notify("Espera a que termine la operaci\u00f3n de la party.");
+    return;
+  }
+  if (language === catalogLanguage()) return;
+  state.preferences.language = language;
+  persistState();
+  renderAll();
+  return refreshSelectedLanguage();
+}
+
 class MovieApiError extends Error {}
 
 async function apiRequest(path, params, signal) {
+  signal?.throwIfAborted();
   if (!api.baseUrl) throw new MovieApiError("Configura la URL del proxy para conectar el cat\u00e1logo TMDB.");
   const url = new URL(`${api.baseUrl}${path}`);
   Object.entries(params).forEach(([key, value]) => url.searchParams.set(key, String(value)));
+  url.searchParams.set("language", catalogLanguage());
   let response;
   try {
     response = await fetch(url, {
@@ -279,21 +362,25 @@ async function apiRequest(path, params, signal) {
 }
 
 async function fetchCatalogPage(query, genre, page, signal) {
+  const language = catalogLanguage();
   const data = await apiRequest("/movies", { query, genre, page }, signal);
   if (!isRecord(data) || data.page !== page || !Number.isInteger(data.totalPages)
     || data.totalPages < 0 || data.totalPages > 500 || !Number.isInteger(data.totalResults) || data.totalResults < 0
     || !Array.isArray(data.results) || data.results.length > 20
-    || !data.results.every((movie) => isTmdbData(movie) && movie.id === `tmdb-${movie.tmdbId}`)) {
+    || !data.results.every((movie) => isTmdbData(movie) && movie.id === `tmdb-${movie.tmdbId}`
+      && (movie.language === undefined || movie.language === language))) {
     throw new MovieApiError("El cat\u00e1logo devolvi\u00f3 un formato no compatible.");
   }
   return { ...data, results: data.results.map(normalizeMovieGenre) };
 }
 
 async function fetchMovieDetails(tmdbId, signal) {
+  const language = catalogLanguage();
   const data = await apiRequest(`/movies/${tmdbId}`, {}, signal);
   if (!isRecord(data) || !isTmdbData(data.movie) || data.movie.tmdbId !== tmdbId
+    || (data.movie.language !== undefined && data.movie.language !== language)
     || data.movie.id !== `tmdb-${tmdbId}`) throw new MovieApiError("No se pudo leer la ficha de esta pel\u00edcula.");
-  return normalizeMovieGenre(data.movie);
+  return { ...normalizeMovieGenre(data.movie), language };
 }
 
 function apiErrorMessage(error) {
@@ -336,8 +423,10 @@ function renderCatalog() {
   catalog.results.forEach((movie) => {
     const row = $("catalog-row-template").content.firstElementChild.cloneNode(true);
     row.querySelector(".catalog-title").textContent = movie.title;
+    row.querySelector(".catalog-title").lang = movie.language ?? catalogLanguage();
     row.querySelector(".catalog-meta").textContent = [movie.year ?? "A\u00f1o no disponible", MOVIE_GENRES[movie.genre]].join(" \u00b7 ");
     row.querySelector(".catalog-description").textContent = movie.description;
+    row.querySelector(".catalog-description").lang = movie.language ?? catalogLanguage();
     const poster = row.querySelector(".catalog-poster");
     if (movie.posterPath) {
       poster.src = `https://image.tmdb.org/t/p/w185${movie.posterPath}`;
@@ -425,6 +514,7 @@ async function selectFromApi(loadMovie, retry, { genre = null, forceFood = false
   }
   selectionController = null;
   pickerMessage = "";
+  localizedMovies.set(`${movie.tmdbId}:${movie.language}`, movie);
   state.draft.movieId = savedMovie.id;
   if (forceFood || state.preferences.autoFood) state.draft.foodId = pickRandom(FOODS, state.draft.foodId).id;
   const saved = persistState();
@@ -445,7 +535,8 @@ function chooseCatalogMovie(movie) {
     return;
   }
   const existing = savedApiMovie(movie);
-  if (existing?.tmdbId && existing.castProfiles !== undefined) {
+  if (existing?.tmdbId && existing.castProfiles !== undefined
+    && (moviePresentation(existing).language ?? "es-ES") === catalogLanguage()) {
     selectMovie(existing.id);
     return;
   }
@@ -561,19 +652,22 @@ function renderCast(movie) {
 }
 
 function renderPicker() {
-  const movie = movieById(state.draft.movieId);
+  const movie = moviePresentation(movieById(state.draft.movieId));
   const food = foodById(state.draft.foodId);
   const count = candidates().length;
   const online = movieSource() === "catalog";
   const busy = Boolean(selectionController) || sharedBusy();
+  $("catalog-language").disabled = sharedBusy();
   $("movie-badge").textContent = movie ? MOVIE_GENRES[movie.genre].toLocaleUpperCase("es") : "POR DESCUBRIR";
   $("movie-title").textContent = movie ? movie.title : "Tu pr\u00f3xima favorita te espera.";
+  $("movie-title").lang = movie?.language ?? "es";
   $("movie-meta").textContent = movie
     ? [movie.year ?? "A\u00f1o no disponible", movie.minutes ? `${movie.minutes} min` : "Duraci\u00f3n no disponible",
       movie.addedByName ? `A\u00f1adida por ${movie.addedByName}` : movie.custom ? "A\u00f1adida por ti" : null,
       movie.watched ? "Ya vista" : null].filter(Boolean).join(" \u00b7 ")
     : online ? "Un cat\u00e1logo entero por descubrir." : `${state.movies.length} pel\u00edculas en tu colecci\u00f3n.`;
   $("movie-description").textContent = movie ? movie.description : "Pulsa el bot\u00f3n y descubre qu\u00e9 ver esta noche.";
+  $("movie-description").lang = movie?.language ?? "es";
   const details = movie?.tmdbId ? movie : null;
   $("movie-score").hidden = !details;
   $("movie-score-value").textContent = details && details.rating !== null ? `${Math.round(details.rating * 10)}%` : "\u2014";
@@ -584,6 +678,7 @@ function renderPicker() {
   renderCast(details);
   $("movie-directors").textContent = details?.directors.join(", ") || "Direcci\u00f3n no disponible";
   $("movie-genres").textContent = details?.genres.join(", ") || "G\u00e9neros no disponibles";
+  $("movie-genres").lang = details?.genres.length ? (details.language ?? "es") : "es";
   $("movie-original-title").textContent = details?.originalTitle || "No disponible";
   $("movie-tmdb-link").hidden = !movie?.tmdbId;
   if (movie?.tmdbId) $("movie-tmdb-link").href = `https://www.themoviedb.org/movie/${movie.tmdbId}`;
@@ -711,13 +806,14 @@ function renderMovies() {
   document.querySelectorAll("[data-movie-tab]").forEach((button) => {
     button.setAttribute("aria-pressed", String(button.dataset.movieTab === state.preferences.movieTab));
   });
-  const movies = state.movies.filter((movie) => movie.watched === showWatched);
+  const movies = state.movies.filter((movie) => movie.watched === showWatched).map(moviePresentation);
   // Custom additions appear first so the result is visible even in a long collection.
   movies.sort((a, b) => Number(b.custom) - Number(a.custom));
   const fragment = document.createDocumentFragment();
   movies.forEach((movie) => {
     const row = $("movie-row-template").content.firstElementChild.cloneNode(true);
     row.querySelector(".movie-row-title").textContent = movie.title;
+    row.querySelector(".movie-row-title").lang = movie.language ?? "es";
     row.querySelector(".movie-row-meta").textContent = [MOVIE_GENRES[movie.genre], movie.year,
       movie.minutes ? `${movie.minutes} min` : null, movie.tmdbId ? "TMDB" : null,
       movie.addedByName ? `A\u00f1adida por ${movie.addedByName}` : movie.custom ? "A\u00f1adida por ti" : null].filter(Boolean).join(" \u00b7 ");
@@ -847,9 +943,10 @@ function renderPlans() {
   const dateFormatter = new Intl.DateTimeFormat("es", { day: "numeric", month: "short", year: "numeric" });
   const fragment = document.createDocumentFragment();
   plans.forEach((plan) => {
-    const movie = movieById(plan.movieId);
+    const movie = moviePresentation(movieById(plan.movieId));
     const row = $("plan-row-template").content.firstElementChild.cloneNode(true);
     row.querySelector(".plan-movie-title").textContent = movie.title;
+    row.querySelector(".plan-movie-title").lang = movie.language ?? "es";
     row.querySelector(".plan-author").textContent = plan.createdByName ? `Plan de ${plan.createdByName}` : "";
     const time = row.querySelector("time");
     time.dateTime = plan.date;
@@ -915,6 +1012,7 @@ function renderOrganizer() {
 }
 
 function renderAll() {
+  syncCatalogLanguage();
   renderTheme();
   renderPicker();
   renderMovies();
@@ -933,6 +1031,7 @@ function renderAll() {
 
 // Delegated list events continue working after templates are re-rendered.
 $("random-movie").addEventListener("click", () => randomMovie());
+$("catalog-language").addEventListener("change", (event) => changeCatalogLanguage(event.target.value));
 $("random-food").addEventListener("click", randomFood);
 $("retry-movie").addEventListener("click", () => selectionRetry?.());
 $("movie-poster").addEventListener("error", () => {
@@ -1098,8 +1197,10 @@ window.addEventListener("storage", (event) => {
   storageWritable = true;
   $("storage-notice").hidden = true;
   renderAll();
+  refreshSelectedLanguage();
   notify("La colecci\u00f3n se ha actualizado desde otra pesta\u00f1a.");
 });
 
 renderAll();
 const partyReady = initializeParties();
+if (!party.session) refreshSelectedLanguage();

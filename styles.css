@@ -169,7 +169,9 @@ body:has(#party-dialog[open]) { overflow: hidden; }
 /* One continuous planning flow, with secondary settings tucked into a disclosure. */
 .planner { padding-bottom: 28px; border-bottom: 1px solid var(--border); }
 .picker-controls { position: sticky; top: 0; z-index: 3; padding-block: 12px 16px; margin-bottom: 24px; background: var(--page); border-bottom: 1px solid var(--border); }
-.planner-toolbar { display: flex; justify-content: space-between; align-items: center; gap: 16px; margin-bottom: 12px; }
+.planner-toolbar { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 12px 16px; margin-bottom: 12px; }
+.catalog-language-control { flex-direction: row; align-items: center; flex-wrap: wrap; gap: 6px 10px; margin-left: auto; }
+.catalog-language-control select { width: auto; }
 .picker-options { position: relative; z-index: 2; }
 .picker-options summary { display: flex; align-items: center; gap: 8px; min-height: 36px; padding: 5px 0 5px 10px; list-style: none; color: var(--muted); font-size: 12px; }
 .picker-options summary::-webkit-details-marker { display: none; }
@@ -448,6 +450,7 @@ body:has(#party-dialog[open]) { overflow: hidden; }
   [data-theme="movie"] .plan-fields { grid-template-columns: minmax(0, 1fr); }
 }
 @media (max-width: 540px) {
+  .catalog-language-control { flex-basis: 100%; order: 1; justify-content: space-between; margin-left: 0; }
   .site-header { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 10px 12px; padding-block: 12px; }
   .brand { font-size: 23px; }
   .brand-mark { width: 30px; height: 30px; margin-right: 7px; }

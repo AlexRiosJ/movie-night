@@ -114,6 +114,35 @@ test("normalization bounds optional fields and missing metadata", () => {
   }
 });
 
+test("discovery, search and details localize titles, synopses and posters in either language", async (t) => {
+  t.mock.method(globalThis, "fetch", async (url) => {
+    const language = url.searchParams.get("language");
+    const english = language === "en-US";
+    const data = upstreamMovie({
+      title: english ? "English title" : "Titulo en espanol",
+      overview: english ? "English synopsis" : "Sinopsis en espanol",
+      poster_path: english ? "/english.jpg" : "/spanish.jpg",
+    });
+    return json(url.pathname === "/3/movie/42" ? data : list([data]));
+  });
+  for (const language of ["es-ES", "en-US"]) {
+    for (const route of ["/movies?", "/movies?query=Movie&", "/movies/42?"]) {
+      const response = await worker.fetch(request(`${route}language=${language}`), env);
+      assert.equal(response.status, 200);
+      const data = await response.json();
+      const movie = data.movie ?? data.results[0];
+      assert.equal(movie.language, language);
+      assert.equal(movie.title, language === "en-US" ? "English title" : "Titulo en espanol");
+      assert.equal(movie.description, language === "en-US" ? "English synopsis" : "Sinopsis en espanol");
+      assert.equal(movie.posterPath, language === "en-US" ? "/english.jpg" : "/spanish.jpg");
+      assert.deepEqual(movie.genres, [language === "en-US" ? "Science Fiction" : "Ciencia ficci\u00f3n"]);
+    }
+  }
+  const result = normalizeMovie(upstreamMovie({ overview: "", poster_path: null }), null, "en-US");
+  assert.equal(result.description, "No synopsis available.");
+  assert.equal(result.posterPath, null);
+});
+
 test("cast profiles preserve principal cast order, deduplicate names, and sanitize image paths", () => {
   const result = normalizeMovie(upstreamMovie({ credits: { cast: [
     { name: " First ", profile_path: "/first.jpg" },
@@ -152,6 +181,9 @@ test("invalid inputs, routes and HTTP methods never hit TMDB", async (t) => {
   for (const path of ["/movies?page=0", "/movies?page=501", "/movies?page=1.5", "/movies?page=01",
     "/movies?genre=unknown", "/movies?query=" + "a".repeat(121), "/movies?api_key=x",
     "/movies?page=1&page=2", "/movies?query=%00", "/movies/0", "/movies/42?append_to_response=account",
+    "/movies?language=en", "/movies?language=", "/movies?language=fr-FR",
+    "/movies?language=es-ES&language=en-US", "/movies/42?language=en-US&language=en-US",
+    "/movies/42?language=fr-FR", "/movies/42?language=en-US&page=1",
     "/account", "/https://evil.example", "/movies/9007199254740992"]) {
     assert.ok([400, 404].includes((await worker.fetch(request(path), env)).status), path);
   }
@@ -260,4 +292,33 @@ test("cached public data does not leak one caller's CORS origin to another", asy
   assert.equal(second.headers.get("Access-Control-Allow-Origin"), "http://localhost:8000");
   assert.equal(upstream.mock.calls.length, 1);
   assert.equal([...entries.values()][0].headers.has("Access-Control-Allow-Origin"), false);
+});
+
+test("catalog and detail caches separate languages and canonicalize the Spanish default", async (t) => {
+  const entries = new Map();
+  const descriptor = Object.getOwnPropertyDescriptor(globalThis, "caches");
+  t.after(() => {
+    if (descriptor) Object.defineProperty(globalThis, "caches", descriptor);
+    else delete globalThis.caches;
+  });
+  globalThis.caches = { default: {
+    match: async (key) => entries.get(key.url)?.clone(),
+    put: async (key, response) => { entries.set(key.url, response); },
+  } };
+  const upstream = t.mock.method(globalThis, "fetch", async (url) => {
+    const data = upstreamMovie({ title: url.searchParams.get("language") });
+    return json(url.pathname === "/3/movie/42" ? data : list([data]));
+  });
+  const pending = [];
+  const context = { waitUntil: (promise) => pending.push(promise) };
+  for (const route of ["/movies", "/movies/42"]) {
+    for (const suffix of ["", "?language=en-US", "?language=es-ES", "?language=en-US"]) {
+      const response = await worker.fetch(request(route + suffix), env, context);
+      const data = await response.json();
+      assert.equal((data.movie ?? data.results[0]).title, suffix.includes("en-US") ? "en-US" : "es-ES");
+      await Promise.all(pending);
+    }
+  }
+  assert.equal(upstream.mock.calls.length, 4);
+  assert.equal(entries.size, 4);
 });

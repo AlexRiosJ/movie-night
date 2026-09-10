@@ -59,6 +59,7 @@ function persistPartyView() {
 function loadPartyView(snapshot) {
   const initial = { ...freshState(), theme: state.theme, colorMode: state.colorMode,
     movies: snapshot.movies.map(normalizeMovieGenre), plans: snapshot.plans };
+  initial.preferences.language = catalogLanguage();
   try {
     const raw = localStorage.getItem(`movie-night:party-view:${party.session.partyId}`);
     if (raw === null) return initial;
@@ -136,7 +137,10 @@ function applyPartySnapshot(snapshot, initial = false) {
   party.revision = snapshot.revision;
   state = initial ? loadPartyView(snapshot) : { ...state, movies: snapshot.movies.map(normalizeMovieGenre), plans: snapshot.plans };
   if (state.draft.movieId && !movieById(state.draft.movieId)) state.draft.movieId = null;
-  if (initial) renderAll();
+  if (initial) {
+    renderAll();
+    refreshSelectedLanguage();
+  }
   else {
     const focused = document.activeElement.closest(".watch-toggle, .choose-movie, .delete-movie, .complete-plan, .delete-plan, .choose-catalog-movie");
     const list = focused?.closest("#movie-list, #plan-list, #catalog-list");
@@ -197,7 +201,9 @@ function activateParty(session, snapshot = null) {
   party.formMode = "create";
   $("party-options").open = false;
   $("party-copy-status").hidden = true;
+  const language = catalogLanguage();
   state = { ...freshState(), theme: state.theme, colorMode: state.colorMode };
+  state.preferences.language = language;
   if (snapshot) applyPartySnapshot(snapshot, true);
   else renderAll();
   rememberParties();
@@ -227,6 +233,7 @@ function leaveParty() {
   renderAll();
   renderParty();
   closePartyDialog();
+  refreshSelectedLanguage();
 }
 
 function sharedBusy() {

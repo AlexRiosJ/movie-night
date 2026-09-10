@@ -410,6 +410,7 @@ test("movie and plan payloads enforce frontend maxima, canonical IDs, known valu
     { castProfiles: [{ name: "", profilePath: null }] },
     { castProfiles: [{ name: "Actor", profilePath: "//evil.example/photo.jpg" }] },
     { voteCount: -1 }, { voteCount: 1.5 }, { voteCount: Number.MAX_SAFE_INTEGER + 1 },
+    { language: "fr-FR" }, { language: null }, { language: { toString: "en-US" } },
   ]) {
     const result = await send(db, host, "/movies", { method: "POST", body: { movie: tmdb(overrides) } });
     assert.equal(result.status, 400, JSON.stringify(overrides));
@@ -432,6 +433,19 @@ test("movie and plan payloads enforce frontend maxima, canonical IDs, known valu
   assert.equal((await send(db, host, "/movies/tmdb-42", { method: "PATCH", body: { watched: "true" } })).status, 400);
   const planId = (await send(db, host)).data.plans[0].id;
   assert.equal((await send(db, host, `/plans/${planId}`, { method: "PATCH", body: { completed: 1 } })).status, 400);
+});
+
+test("parties preserve optional TMDB language without rewriting an existing movie", async (t) => {
+  const db = database(t);
+  const host = (await create(db)).session;
+  const original = tmdb({ language: "en-US", title: "English title", posterPath: "/english.jpg" });
+  const first = await addMovie(db, host, original);
+  assert.equal(first.movies[0].language, "en-US");
+  const repeated = await addMovie(db, host, tmdb({ language: "es-ES" }));
+  assert.deepEqual(repeated, first);
+  const stored = await send(db, host);
+  assert.equal(stored.data.movies[0].posterPath, "/english.jpg");
+  assert.equal(stored.data.movies[0].language, "en-US");
 });
 
 test("JSON body reading limits actual UTF-8 bytes, not just Content-Length; invalid encoding and JSON are rejected", async (t) => {

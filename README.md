@@ -88,6 +88,21 @@ Configure Cloudflare rate limiting and monitor Worker/TMDB usage for a public
 deployment. TMDB rate-limit failures are shown to visitors rather than silently
 replacing results with a small local list.
 
+### Catalog language
+
+`GET /movies` and `GET /movies/{tmdbId}` accept an optional `language` query
+parameter: `es-ES` (the backward-compatible default) or `en-US`. Discovery,
+search, and details all forward this language to TMDB; their public cache keys
+include it so English and Spanish results never share an entry. Other languages,
+duplicate parameters, and unapproved parameters are rejected.
+
+Movie responses include `language`, the requested metadata language (not the
+film's original language). TMDB's `poster_path` prefers an image in that language,
+then falls back to an available image. A translated title, synopsis, or poster
+cannot be guaranteed when TMDB has none. No additional image request is needed.
+Deploy the updated Worker before publishing this frontend. This change needs
+no D1 migration; saved movies without a language continue to work.
+
 ## Enable shared parties (optional)
 
 Parties use the same Worker URL and `ALLOWED_ORIGINS` as the catalog, but do not
@@ -254,6 +269,16 @@ documentation changes.
 - **Explorar** browses popular movies, searches by title, and pages through
   results. With an empty title, the genre selector filters discovery.
   Title searches span all genres and distinguish releases by year.
+- **Idioma del catalogo** above the picker chooses **Español** or **English**
+  for titles, synopses, and posters in discovery, search, details, and random
+  selections. The menus remain in Spanish. Spanish is the default; the choice
+  persists with personal preferences or the local view of each party.
+  Changing language reloads catalog results from page 1 with the same search
+  and genre, cancels older requests, and refreshes the selected TMDB movie
+  without changing the draft, food, watched state, or plans.
+  Other saved movies retain their metadata until selected again from TMDB;
+  manual movies are unchanged. Party translations are local presentations,
+  not edits to other members' saved movies. New additions retain their language.
 - **Elegir y guardar** loads the complete movie details before selecting it and
   adding it to your collection. Only chosen movies are stored, not every search
   result. Choosing an existing TMDB movie does not duplicate it or reset its
@@ -263,7 +288,7 @@ documentation changes.
   directors, genres, and original title. A prominent user score shows TMDB's
   average rating as a percentage (rounded to the nearest whole percent), with
   the number of votes. Movies without a rating say so rather than showing 0%.
-  Data is requested in Spanish; translations and some metadata may be missing.
+  Data uses the selected catalog language; translations and some metadata may be missing.
   Missing or broken cast portraits show "Sin foto" while keeping the actor's name.
   Missing fields have explicit placeholders, and missing/broken posters use the
   original cinema illustration (or a compact posterless layout on small screens).
@@ -284,8 +309,7 @@ documentation changes.
   it does not mean TMDB knows your viewing history.
 - Genre groups are approximate discovery filters: horror/mystery,
   comedy/romance/family, science fiction, fantasy, and other genres. The existing
-  proxy category IDs are retained, so this interface update needs no Worker
-  deployment. Its "other genres" discovery filter still excludes the legacy
+  proxy category IDs are retained. Its "other genres" discovery filter still excludes the legacy
   Christmas keyword; title searches and unfiltered discovery include those movies.
 - **Mis noches** and **Mi coleccion** retain the existing saved plans, manual
   movie form, pending/watched toggles, and exact-movie selection. Only one list

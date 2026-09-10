@@ -135,6 +135,199 @@ test("fresh users get no fixed movie list and a clear setup state", () => {
   assert.equal(ui.nodes.get("movie-cast").hidden, true);
 });
 
+test("catalog language defaults to Spanish, migrates older storage, and persists valid choices", async () => {
+  const ui = app();
+  assert.equal(ui.nodes.get("catalog-language").value, "es-ES");
+  assert.match(html, /<label for="catalog-language"/);
+  assert.match(html, /<option value="en-US" lang="en">English<\/option>/);
+  await ui.nodes.get("catalog-language").listeners.change({ target: { value: "en-US" } });
+  const raw = ui.storage.get("movie-night:v1");
+  assert.equal(JSON.parse(raw).preferences.language, "en-US");
+  const reloaded = app({ raw });
+  assert.equal(reloaded.nodes.get("catalog-language").value, "en-US");
+  const legacy = JSON.parse(raw);
+  delete legacy.preferences.language;
+  const migrated = app({ raw: JSON.stringify(legacy) });
+  assert.equal(migrated.run("catalogLanguage()"), "es-ES");
+  assert.equal(migrated.run("storageWritable"), true);
+  assert.equal(migrated.storage.get("movie-night:v1"), JSON.stringify(legacy));
+  for (const language of ["fr-FR", null, { toString: "en-US" }]) {
+    const invalid = JSON.stringify({ ...legacy, preferences: { ...legacy.preferences, language } });
+    const damaged = app({ raw: invalid });
+    damaged.run("persistState()");
+    assert.equal(damaged.run("storageWritable"), false);
+    assert.equal(damaged.storage.get("movie-night:v1"), invalid);
+  }
+  await ui.nodes.get("catalog-language").listeners.change({ target: { value: "fr-FR" } });
+  assert.equal(ui.nodes.get("catalog-language").value, "en-US");
+  assert.match(ui.nodes.get("toast").textContent, /idioma/);
+  assert.equal(ui.storage.get("movie-night:v1"), raw);
+});
+
+test("English search, pagination and random selection render localized titles and posters end to end", async (t) => {
+  const upstream = [];
+  t.mock.method(globalThis, "fetch", async (url) => {
+    upstream.push(url);
+    const data = {
+      id: 42, title: "English title", original_title: "Original", overview: "English synopsis",
+      genre_ids: [878], poster_path: "/english.jpg",
+    };
+    return json(url.pathname === "/3/movie/42" ? data : {
+      page: Number(url.searchParams.get("page")), total_pages: 2, total_results: 40, results: [data],
+    });
+  });
+  const ui = app({ fetch: (url, options) => worker.fetch(new Request(url, options), {
+    ALLOWED_ORIGINS: "https://alexriosj.github.io", TMDB_READ_TOKEN: "test-token",
+  }) });
+  ui.run(`state.preferences.language = "en-US"; api.baseUrl = "https://api.example.com";
+    catalog.query = "English title"; catalog.genre = "fantasy"`);
+  await ui.run("loadCatalog(2)");
+  const card = ui.nodes.get("catalog-list").children[0];
+  assert.equal(card.querySelector(".catalog-title").textContent, "English title");
+  assert.equal(card.querySelector(".catalog-poster").src, "https://image.tmdb.org/t/p/w185/english.jpg");
+  await ui.run("randomMovie()");
+  assert.equal(ui.nodes.get("movie-title").textContent, "English title");
+  assert.equal(ui.nodes.get("movie-poster").src, "https://image.tmdb.org/t/p/w500/english.jpg");
+  assert.equal(ui.run("state.movies[0].language"), "en-US");
+  assert.equal(ui.run("isValidState(state)"), true);
+  assert.ok(upstream.some((url) => url.pathname === "/3/search/movie"));
+  assert.ok(upstream.some((url) => url.pathname === "/3/discover/movie"));
+  assert.ok(upstream.some((url) => url.pathname === "/3/movie/42"));
+  assert.ok(upstream.every((url) => url.searchParams.get("language") === "en-US"));
+});
+
+test("switching language refreshes the selected movie without changing watched status or the plan", async () => {
+  const requests = [];
+  const ui = app({ fetch: async (url) => {
+    requests.push(url);
+    const language = url.searchParams.get("language");
+    const data = movie(42, { language, title: language, posterPath: `/${language}.jpg` });
+    return json(url.pathname === "/movies" ? page([data]) : { movie: data });
+  } });
+  ui.set("result", movie());
+  ui.run(`saveApiMovie(result).watched = true; selectMovie(result.id);
+    state.draft.date = "2026-09-10"; state.draft.place = "Home";
+    state.plans.push({ id: "night", movieId: result.id, foodId: "pizza", date: "2026-09-10", place: "Home", completed: true });
+    state.preferences.planTab = "completed";
+    api.baseUrl = "https://api.example.com"; catalog.query = "Same search"; catalog.genre = "cozy"; catalog.page = 3;`);
+  const before = JSON.parse(ui.run("JSON.stringify(state)"));
+  await ui.nodes.get("catalog-language").listeners.change({ target: { value: "en-US" } });
+  assert.equal(ui.nodes.get("movie-title").textContent, "en-US");
+  assert.equal(ui.nodes.get("movie-poster").src, "https://image.tmdb.org/t/p/w500/en-US.jpg");
+  assert.equal(ui.nodes.get("plan-list").children[0].querySelector(".plan-movie-title").textContent, "en-US");
+  assert.equal(ui.run("state.movies.length"), 1);
+  assert.equal(ui.run("state.movies[0].watched"), true);
+  assert.deepEqual(JSON.parse(ui.run("JSON.stringify(state.draft)")), before.draft);
+  assert.deepEqual(JSON.parse(ui.run("JSON.stringify(state.plans)")), before.plans);
+  const search = requests.find((url) => url.pathname === "/movies");
+  assert.equal(search.searchParams.get("query"), "Same search");
+  assert.equal(search.searchParams.get("genre"), "cozy");
+  assert.equal(search.searchParams.get("page"), "1");
+  const reloaded = app({ raw: ui.storage.get("movie-night:v1") });
+  assert.equal(reloaded.nodes.get("movie-title").textContent, "en-US");
+  await ui.nodes.get("catalog-language").listeners.change({ target: { value: "es-ES" } });
+  assert.equal(ui.nodes.get("movie-title").textContent, "es-ES");
+  await ui.nodes.get("catalog-language").listeners.change({ target: { value: "en-US" } });
+  assert.equal(JSON.parse(ui.storage.get("movie-night:v1")).movies[0].language, "en-US");
+});
+
+test("switching back during a language refresh ignores the late translated details", async () => {
+  const pending = deferred();
+  const ui = app({ fetch: async () => pending.promise });
+  ui.set("result", movie());
+  ui.run(`saveApiMovie(result); selectMovie(result.id); state.preferences.view = "movies";
+    api.baseUrl = "https://api.example.com"`);
+  const translating = ui.run("changeCatalogLanguage('en-US')");
+  await ui.run("changeCatalogLanguage('es-ES')");
+  pending.resolve(json({ movie: movie(42, { title: "English title", language: "en-US" }) }));
+  await translating;
+  assert.equal(ui.nodes.get("movie-title").textContent, "Movie 42");
+  assert.equal(ui.nodes.get("random-movie").attributes["aria-busy"], "false");
+  assert.equal(ui.run("state.movies[0].title"), "Movie 42");
+});
+
+test("language switches cancel old catalog and detail requests and cannot save late selections", async () => {
+  const oldPage = deferred();
+  const oldDetails = deferred();
+  const signals = [];
+  const ui = app({ fetch: async (url, options) => {
+    if (url.searchParams.get("language") === "es-ES") {
+      signals.push(options.signal);
+      return url.pathname === "/movies" ? oldPage.promise : oldDetails.promise;
+    }
+    return json(page([movie(43, { title: "English result", language: "en-US" })]));
+  } });
+  ui.set("result", movie());
+  ui.run("api.baseUrl = 'https://api.example.com'");
+  const loading = ui.run("loadCatalog(3)");
+  const selecting = ui.run("chooseCatalogMovie(result)");
+  await ui.nodes.get("catalog-language").listeners.change({ target: { value: "en-US" } });
+  await new Promise(setImmediate);
+  assert.ok(signals.every((signal) => signal.aborted));
+  oldPage.resolve(json(page([movie()], 3, 5)));
+  oldDetails.resolve(json({ movie: movie() }));
+  await Promise.all([loading, selecting]);
+  assert.equal(ui.run("catalog.results[0].title"), "English result");
+  assert.equal(ui.run("catalog.page"), 1);
+  assert.equal(ui.run("state.movies.length"), 0);
+  assert.equal(ui.run("state.draft.movieId"), null);
+  assert.equal(ui.run("selectionRetry"), null);
+});
+
+test("language sync from another tab invalidates hidden catalog results without fetching unnecessarily", async () => {
+  const ui = app();
+  ui.run(`state.preferences.view = "movies"; catalog.loaded = true;
+    catalog.page = 4; catalog.error = "Old error"; api.baseUrl = "https://api.example.com"`);
+  const updated = JSON.parse(ui.run("JSON.stringify(state)"));
+  updated.preferences.language = "en-US";
+  ui.window.listeners.storage({ key: "movie-night:v1", newValue: JSON.stringify(updated) });
+  assert.equal(ui.nodes.get("catalog-language").value, "en-US");
+  assert.equal(ui.run("catalog.loaded"), false);
+  assert.equal(ui.run("catalog.page"), 1);
+  assert.equal(ui.run("catalog.error"), "");
+  assert.equal(ui.errors.length, 0);
+});
+
+test("failed language refresh retains the selected movie and exposes a retry without changing manual movies", async () => {
+  const ui = app({ fetch: async () => json({ error: "Try again" }, 503) });
+  ui.set("result", movie());
+  ui.run(`saveApiMovie(result); selectMovie(result.id); state.preferences.view = "movies";
+    api.baseUrl = "https://api.example.com"`);
+  await ui.run("changeCatalogLanguage('en-US')");
+  assert.equal(ui.nodes.get("movie-title").textContent, "Movie 42");
+  assert.equal(ui.nodes.get("picker-status").textContent, "Try again");
+  assert.equal(ui.nodes.get("retry-movie").hidden, false);
+  ui.set("fetch", async () => json({ movie: movie(42, { title: "English title", language: "en-US" }) }));
+  await ui.nodes.get("retry-movie").listeners.click();
+  assert.equal(ui.nodes.get("movie-title").textContent, "English title");
+  assert.equal(ui.nodes.get("retry-movie").hidden, true);
+  ui.run(`state.movies.push({ id: "manual", title: "My title", genre: "cozy", year: null,
+    minutes: null, description: "My synopsis", watched: false, custom: true }); selectMovie("manual")`);
+  const previous = ui.run("JSON.stringify(state.movies)");
+  ui.set("fetch", async () => { assert.fail("Manual movie must not request TMDB"); });
+  await ui.run("changeCatalogLanguage('es-ES')");
+  assert.equal(ui.run("JSON.stringify(state.movies)"), previous);
+  assert.equal(ui.nodes.get("movie-title").textContent, "My title");
+});
+
+test("choosing an existing catalog movie in a different language reloads its details", async () => {
+  let requests = 0;
+  const ui = app({ fetch: async () => {
+    requests++;
+    return json({ movie: movie(42, { title: "English title", language: "en-US", posterPath: "/english.jpg" }) });
+  } });
+  ui.set("result", movie());
+  ui.run(`saveApiMovie(result).watched = true; api.baseUrl = "https://api.example.com";
+    state.preferences.language = "en-US"`);
+  await ui.run("chooseCatalogMovie(result)");
+  assert.equal(requests, 1);
+  assert.equal(ui.run("state.movies.length"), 1);
+  assert.equal(ui.run("state.movies[0].watched"), true);
+  assert.equal(ui.nodes.get("movie-title").textContent, "English title");
+  await ui.run("chooseCatalogMovie(result)");
+  assert.equal(requests, 1);
+});
+
 test("the interface defaults to Movie in light mode and separates style from color mode", () => {
   const ui = app();
   assert.equal(ui.run("state.theme"), "movie");
@@ -769,6 +962,71 @@ function enterParty(ui, data = snapshot()) {
   ui.set("snapshot", data);
   ui.run("api.baseUrl = session.apiBaseUrl; catalog.loaded = true; activateParty(session, snapshot)");
 }
+
+test("party language preferences stay local and translated selections do not rewrite shared movies", async () => {
+  const ui = app({ fetch: async (url, options) => {
+    assert.notEqual(options.method, "POST");
+    assert.equal(url.searchParams.get("language"), "en-US");
+    return json(url.pathname === "/movies" ? page([]) : {
+      movie: movie(42, { title: "English title", language: "en-US", posterPath: "/english.jpg" }),
+    });
+  } });
+  ui.run("persistState()");
+  const personal = ui.storage.get("movie-night:v1");
+  enterParty(ui, snapshot({ movies: [sharedMovie(42, { watched: true })], plans: [sharedPlan()] }));
+  ui.run("selectMovie('tmdb-42')");
+  const before = ui.run("JSON.stringify(state.movies)");
+  await ui.run("changeCatalogLanguage('en-US')");
+  assert.equal(ui.run("JSON.stringify(state.movies)"), before);
+  assert.equal(ui.nodes.get("movie-title").textContent, "English title");
+  assert.equal(ui.nodes.get("movie-poster").src, "https://image.tmdb.org/t/p/w500/english.jpg");
+  assert.equal(ui.storage.get("movie-night:v1"), personal);
+  const view = JSON.parse(ui.storage.get(`movie-night:party-view:${sharedSession().partyId}`));
+  assert.equal(view.preferences.language, "en-US");
+  ui.set("updated", snapshot({ movies: [sharedMovie(42, { watched: false })], plans: [sharedPlan()], revision: 1 }));
+  ui.run("applyPartySnapshot(updated)");
+  assert.equal(ui.nodes.get("movie-title").textContent, "English title");
+  assert.equal(ui.nodes.get("movie-list").children[0].querySelector(".movie-row-title").textContent, "English title");
+  ui.run("party.writing = true; renderPicker()");
+  assert.equal(ui.nodes.get("catalog-language").disabled, true);
+  await ui.run("changeCatalogLanguage('es-ES')");
+  assert.equal(ui.run("catalogLanguage()"), "en-US");
+  ui.run("party.writing = false; leaveParty()");
+  assert.equal(ui.run("catalogLanguage()"), "es-ES");
+  enterParty(ui, snapshot({ movies: [sharedMovie()] }));
+  assert.equal(ui.nodes.get("catalog-language").value, "en-US");
+});
+
+test("restored party selections refresh their language and keep earlier translations while browsing", async () => {
+  const data = snapshot({ movies: [sharedMovie(), sharedMovie(43)] });
+  const requests = [];
+  const ui = app({ fetch: async (url, options) => {
+    requests.push(url);
+    if (options.method === "POST") return json(data);
+    assert.equal(url.searchParams.get("language"), "en-US");
+    const id = Number(url.pathname.split("/").at(-1));
+    return json({ movie: movie(id, { title: `English ${id}`, language: "en-US", posterPath: `/english-${id}.jpg` }) });
+  } });
+  const view = JSON.parse(ui.run("JSON.stringify(state)"));
+  view.preferences.language = "en-US";
+  view.preferences.view = "movies";
+  view.draft.movieId = "tmdb-42";
+  ui.storage.set(`movie-night:party-view:${sharedSession().partyId}`, JSON.stringify(view));
+  enterParty(ui, data);
+  await new Promise(setImmediate);
+  assert.equal(ui.nodes.get("movie-title").textContent, "English 42");
+  ui.set("result", movie(43));
+  await ui.run("chooseCatalogMovie(result)");
+  assert.equal(ui.nodes.get("movie-title").textContent, "English 43");
+  assert.deepEqual(ui.nodes.get("movie-list").children.map((row) => row.querySelector(".movie-row-title").textContent),
+    ["English 42", "English 43"]);
+  const count = requests.length;
+  ui.set("result", movie());
+  await ui.run("chooseCatalogMovie(result)");
+  assert.equal(requests.length, count);
+  assert.equal(ui.nodes.get("movie-title").textContent, "English 42");
+  assert.equal(ui.run("state.movies[0].title"), "Movie 42");
+});
 
 test("party appearance inherits, saves, and restores both style and mode without changing personal settings", () => {
   for (const theme of themeNames) {

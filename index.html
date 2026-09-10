@@ -7,10 +7,10 @@
     <meta name="description" content="Una peli, algo rico y un buen plan. Organiza tus movie nights y guarda tu colección, sin cuentas ni complicaciones.">
     <title>Movie Night &mdash; Tu pr&oacute;ximo buen plan</title>
     <link rel="icon" href="./assets/favicon.svg" type="image/svg+xml">
-    <link rel="stylesheet" href="./styles.css?v=party-dialog-2">
+    <link rel="stylesheet" href="./styles.css?v=catalog-language-1">
     <script src="./config.js?v=parties-1" defer></script>
-    <script src="./parties.js?v=party-dialog-2" defer></script>
-    <script src="./app.js?v=party-dialog-2" defer></script>
+    <script src="./parties.js?v=catalog-language-1" defer></script>
+    <script src="./app.js?v=catalog-language-1" defer></script>
   </head>
   <body>
     <a class="skip-link" href="#main">Saltar al contenido</a>
@@ -87,6 +87,12 @@
         <div class="picker-controls">
           <div class="planner-toolbar">
             <span class="eyebrow">EL PLAN DE HOY</span>
+            <label for="catalog-language" class="catalog-language-control">Idioma del cat&aacute;logo
+              <select id="catalog-language" aria-describedby="catalog-language-hint">
+                <option value="es-ES" lang="es">Espa&ntilde;ol</option>
+                <option value="en-US" lang="en">English</option>
+              </select>
+            </label>
             <details id="picker-options" class="picker-options">
               <summary>Preferencias <svg class="icon small"><use href="#icon-chevron"/></svg></summary>
               <div class="picker-filters">
@@ -111,6 +117,7 @@
               </div>
             </details>
           </div>
+          <p id="catalog-language-hint" class="sr-only">Idioma de los t&iacute;tulos, sinopsis y p&oacute;sters de TMDB, seg&uacute;n disponibilidad. No cambia el idioma de los men&uacute;s.</p>
           <div class="movie-picker-actions">
             <button id="random-movie" class="button button-primary" type="button" aria-describedby="candidate-count" aria-busy="false"><span id="random-movie-icon" class="random-movie-icon" aria-hidden="true"><svg class="icon"><use href="#icon-shuffle"/></svg></span><span id="random-movie-spinner" class="button-spinner" aria-hidden="true" hidden></span>Elegir pel&iacute;cula aleatoria</button>
             <p id="candidate-count" class="helper">Descubre algo nuevo esta noche.</p>

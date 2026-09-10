@@ -89,6 +89,10 @@ function validateMovie(value) {
       if (value.voteCount !== null && (!Number.isSafeInteger(value.voteCount) || value.voteCount < 0)) invalid();
       movie.voteCount = value.voteCount;
     }
+    if (value.language !== undefined) {
+      if (!["es-ES", "en-US"].includes(value.language)) invalid();
+      movie.language = value.language;
+    }
   }
   return movie;
 }

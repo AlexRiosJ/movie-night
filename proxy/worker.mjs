@@ -141,9 +141,10 @@ async function tmdbRequest(route, token) {
   }
   let response;
   try {
+    // Workers requires "manual" to avoid forwarding the credential on redirects.
     response = await fetch(url, {
       method: "GET", headers: { Authorization: `Bearer ${token}`, Accept: "application/json" },
-      signal: AbortSignal.timeout(10000), redirect: "error",
+      signal: AbortSignal.timeout(10000), redirect: "manual",
     });
   } catch (error) {
     if (["TimeoutError", "AbortError"].includes(error.name)) throw new HttpError(504, "TMDB est\u00e1 tardando demasiado. Int\u00e9ntalo de nuevo.");

@@ -32,7 +32,7 @@ test("discovery sends only approved parameters and the secret to TMDB", async (t
   assert.equal(calls[0].url.searchParams.get("include_adult"), "false");
   assert.equal(calls[0].url.searchParams.get("language"), "es-ES");
   assert.equal(calls[0].options.headers.Authorization, `Bearer ${env.TMDB_READ_TOKEN}`);
-  assert.equal(calls[0].options.redirect, "error");
+  assert.equal(calls[0].options.redirect, "manual");
   assert.equal(data.totalPages, 500);
   assert.equal(data.results[0].id, "tmdb-42");
   assert.equal(JSON.stringify(data).includes(env.TMDB_READ_TOKEN), false);
@@ -147,6 +147,31 @@ test("missing secret and upstream failures produce useful, noncached errors", as
     if (status === 429) assert.equal(response.headers.get("Retry-After"), "60");
     assert.equal((await response.text()).includes(env.TMDB_READ_TOKEN), false);
     t.mock.restoreAll();
+  }
+});
+
+test("upstream redirects fail without forwarding credentials or exposing the response", async (t) => {
+  for (const path of ["/movies", "/movies?query=Movie", "/movies/42"]) {
+    for (const status of [301, 302, 303, 307, 308]) {
+      let calls = 0;
+      t.mock.method(globalThis, "fetch", async (url, options) => {
+        calls++;
+        assert.equal(url.origin, "https://api.themoviedb.org");
+        assert.equal(options.redirect, "manual");
+        return new Response("Private upstream response", {
+          status, headers: { Location: "https://redirect.example.com/" },
+        });
+      });
+      const response = await worker.fetch(request(path), env);
+      assert.equal(response.status, 502);
+      assert.equal(calls, 1);
+      assert.equal(response.headers.has("Location"), false);
+      assert.equal(response.headers.get("Cache-Control"), "no-store");
+      const body = await response.text();
+      assert.equal(body.includes("Private upstream response"), false);
+      assert.equal(body.includes(env.TMDB_READ_TOKEN), false);
+      t.mock.restoreAll();
+    }
   }
 });
 

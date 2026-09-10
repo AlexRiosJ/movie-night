@@ -217,6 +217,18 @@ or `language=en-US`, default to `es-MX`, and return `movie.language` on each mov
 The frontend rejects responses from an older or mismatched-language proxy rather
 than caching the wrong translations. Worker caches are isolated by language.
 
+### Update the Worker with Copilot
+
+The repository includes the [update-worker skill](.github/skills/update-worker/SKILL.md)
+to decide when backend changes need deployment and guide the Wrangler update,
+including D1 migrations when needed, secret handling, and post-deployment checks.
+It blocks deployments from branches missing the latest `origin/main` and
+coordinates with concurrent deployments to avoid removing published party support.
+Ask Copilot: **"Usa la skill update-worker para actualizar el worker si hace falta."**
+The skill requests deployment authorization when it is not already explicit;
+it does not schedule automatic updates or redeploy for frontend-only or
+documentation changes.
+
 ## Using the app
 
 - The header's **Idioma / Language** selector switches between **Spanish**

@@ -92,6 +92,8 @@ input[type="checkbox"], input[type="radio"] { width: 16px; height: 16px; margin:
 .brand-light { font-weight: 450; }
 .brand-dot { color: var(--accent); }
 .brand-mark { display: grid; place-items: center; width: 33px; height: 33px; margin-right: 9px; border-radius: 10px; background: var(--accent); color: #fff; transform: rotate(-8deg); }
+.header-controls { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 8px 12px; }
+.language-control select { width: auto; max-width: 100%; font-size: 12px; }
 .theme-control { position: relative; z-index: 4; }
 .theme-toggle { display: flex; align-items: center; gap: 9px; min-height: 40px; padding: 8px 12px; background: transparent; border: 1px solid var(--border); border-radius: 24px; font-size: 12px; }
 .theme-dot { width: 8px; height: 8px; background: var(--accent); border-radius: 50%; }
@@ -223,7 +225,8 @@ h1 em { color: var(--accent); }
   .view-tabs > button { font-size: 21px; }
 }
 @media (max-width: 540px) {
-  .site-header { min-height: 74px; gap: 12px; }
+  .site-header { min-height: 74px; gap: 12px; flex-wrap: wrap; padding-block: 14px; }
+  .header-controls { flex: 1; }
   .brand { font-size: 23px; }
   .brand-mark { width: 30px; height: 30px; margin-right: 7px; }
   .theme-toggle { gap: 7px; padding-inline: 9px; font-size: 11px; }

@@ -1,6 +1,6 @@
 # Movie Night
 
-A Spanish-language movie-night planner built with plain HTML, CSS, and JavaScript.
+A bilingual movie-night planner built with plain HTML, CSS, and JavaScript.
 Search and discover movies through **The Movie Database (TMDB)**, choose food,
 and keep a personal collection and movie-night plans in your browser.
 
@@ -15,6 +15,7 @@ movie-night/
   index.html          Page, forms, templates, and original theme artwork
   styles.css          Responsive layout and five theme palettes
   config.js           Public proxy URL only (never a token)
+  i18n.js             Spanish (Latin America)/English interface translation helpers
   app.js              API client, catalog, collection, plans, and localStorage
   app.test.mjs        Frontend behavior tests using Node's built-in test runner
   assets/
@@ -116,8 +117,24 @@ Pages publishes the static frontend, not the Worker. Deploy Worker changes with
 Wrangler separately. All frontend asset paths are relative, so the app also works
 under a custom domain; update the Worker origin allowlist when changing domains.
 
+For the bilingual version, deploy the updated Worker **before** publishing the
+frontend, including the new `i18n.js`. Both API routes now accept `language=es-MX`
+or `language=en-US`, default to `es-MX`, and return `movie.language` on each movie.
+The frontend rejects responses from an older or mismatched-language proxy rather
+than caching the wrong translations. Worker caches are isolated by language.
+
 ## Using the app
 
+- The header's **Idioma / Language** selector switches between **Spanish**
+  (`es-MX`, the default) and **English** (`en-US`). The choice is saved in this
+  browser and applies to controls, messages, food names, dates, and movie metadata.
+  TMDB uses Mexico's Spanish locale for Latin American movie titles.
+- Switching languages refreshes search/discovery and fetches missing translations
+  for saved TMDB movies, starting with the selected movie. A movie remains **one
+  entry identified by its TMDB ID**: changing its displayed title (for example,
+  *Home Alone* / *Mi pobre angelito*) does not duplicate it, reset watched status,
+  change food or draft fields, or break saved plans. Collection and plan titles
+  use the same localized details.
 - **Explorar** browses popular movies, searches by title, and pages through
   results. With an empty title, the universe selector filters discovery.
   Title searches span all universes and distinguish releases by year.
@@ -127,9 +144,15 @@ under a custom domain; update the Worker origin allowlist when changing domains.
   watched status.
 - Movie details include title, release year, runtime, synopsis, poster, up to
   12 principal cast members, directors, genres, original title, and TMDB rating.
-  Data is requested in Spanish; translations and some metadata may be missing.
+  Data is requested in the selected language; translations and some metadata
+  may be missing.
   Missing fields have explicit placeholders, and missing/broken posters use the
   original theme illustration (or a compact posterless layout on small screens).
+  Movie details prefer posters in the selected language, then language-neutral
+  artwork, then an available fallback. TMDB labels poster languages, not countries,
+  so a Spanish poster is not guaranteed to be specific to Latin America. Catalog
+  thumbnails use TMDB's localized search/discovery poster. Titles and artwork
+  depend on TMDB's available translations; the app does not invent translations.
 - **Elegir pelicula aleatoria** uses TMDB by default when configured. It samples
   different discovery pages, avoids the current movie, and respects your universe
   and watched filter. Discovery includes released movies with at least 50 votes,
@@ -157,15 +180,25 @@ Failures leave the previous selected movie and saved plans intact. Use
 
 ## Storage and privacy
 
-Movies (including selected TMDB metadata), watched status, plans, draft fields,
-filters, theme, and active list are stored under `movie-night:v1` in localStorage.
+Movies (including selected TMDB metadata and per-language detail caches), watched
+status, plans, draft fields, language, filters, theme, and active list are stored
+under `movie-night:v1` in localStorage.
 Existing collections and plans are preserved; the new catalog does not reset or
-automatically replace them. A legacy entry with the same title and release year
-can receive TMDB details while keeping its ID, watched status, and plan references.
+automatically replace them. A legacy entry with the same localized or original
+title and release year can receive TMDB details while keeping its ID, watched
+status, and plan references.
 Custom movies are not guessed or automatically matched to an ambiguous API result.
 
-Collections and plans are not uploaded. Search terms, universe filters, page
-numbers, and selected TMDB IDs go through the configured Worker to TMDB. Posters
+Already-loaded translations remain available without the proxy. When a translation
+cannot be fetched, the last available movie details stay visible with an explicit
+notice and retry action. Older TMDB entries are refreshed by their existing TMDB
+IDs; their previous Spanish metadata is not assumed to be Latin American Spanish.
+Manual movie titles and saved locations are never translated.
+
+Plans, watched status, manual movies, and locations are not uploaded.
+Search terms, universe filters, page
+numbers, language, and TMDB IDs for selections and saved-movie translation
+refreshes go through the configured Worker to TMDB. Posters
 load directly from TMDB's image CDN, and the attribution logo loads from TMDB.
 These services receive normal network information such as IP addresses. There
 are no third-party fonts or analytics in the app.

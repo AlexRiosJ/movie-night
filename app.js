@@ -9,6 +9,10 @@ const GENRES = {
   christmas: "Navidad",
 };
 const MOVIE_GENRES = { ...GENRES, general: "Otros g\u00e9neros" };
+const ENGLISH_GENRES = {
+  spooky: "Spooky season", cozy: "Cozy autumn", "sci-fi": "Sci-fi",
+  fantasy: "Fantasy", christmas: "Christmas", general: "Other genres",
+};
 const MOODS = {
   spooky: "Un poquito de magia.\nUn poquito de misterio.",
   cozy: "Una taza caliente.\nUna historia bonita.",
@@ -16,19 +20,45 @@ const MOODS = {
   fantasy: "La magia empieza\ncuando le das al play.",
   christmas: "Luces encendidas.\nCoraz\u00f3n calentito.",
 };
+const ENGLISH_MOODS = {
+  spooky: "A little magic.\nA little mystery.",
+  cozy: "A warm cup.\nA lovely story.",
+  "sci-fi": "Next stop:\nanother galaxy.",
+  fantasy: "The magic begins\nwhen you press play.",
+  christmas: "Lights on.\nHearts warmed.",
+};
 const FOODS = [
   { id: "pizza", name: "Pizza para compartir", description: "Tu favorita, reci\u00e9n hecha. La \u00faltima porci\u00f3n se negocia." },
   { id: "popcorn", name: "Palomitas de cine", description: "Dulces o saladas. El cl\u00e1sico que nunca falla." },
   { id: "pasta", name: "Un buen plato de pasta", description: "Tu salsa favorita y una noche sin complicaciones." },
   { id: "snacks", name: "Tabla de snacks", description: "Un poco de queso, fruta, galletas y lo que m\u00e1s te guste." },
   { id: "nachos", name: "Nachos con guacamole", description: "Crujientes, para compartir y con extra de guacamole." },
-  { id: "burgers", name: "Hamburguesas caseras", description: "Unas patatas al lado y ya tenemos un plan redondo." },
+  { id: "burgers", name: "Hamburguesas caseras", description: "Unas papas al lado y ya tenemos un plan redondo." },
   { id: "hot-chocolate", name: "Chocolate y galletas", description: "Una taza calentita, algo dulce y tu manta favorita." },
   { id: "sandwiches", name: "S\u00e1ndwiches a la plancha", description: "Pan crujiente, queso fundido y comodidad en cada bocado." },
 ];
+const ENGLISH_FOODS = {
+  pizza: ["Pizza to share", "Your favorite, fresh from the oven. The last slice is negotiable."],
+  popcorn: ["Movie popcorn", "Sweet or salty. A classic that never fails."],
+  pasta: ["A good plate of pasta", "Your favorite sauce and an easy night in."],
+  snacks: ["Snack board", "Some cheese, fruit, crackers, and whatever you love."],
+  nachos: ["Nachos with guacamole", "Crunchy, made for sharing, with extra guacamole."],
+  burgers: ["Homemade burgers", "Add some fries and the plan is complete."],
+  "hot-chocolate": ["Hot chocolate and cookies", "A warm cup, something sweet, and your favorite blanket."],
+  sandwiches: ["Grilled sandwiches", "Crispy bread, melted cheese, and comfort in every bite."],
+};
+const CUSTOM_MOVIE_DESCRIPTIONS = [
+  "Una de tus elegidas. El mejor motivo para reservar una noche de pel\u00edcula.",
+  "One of your picks. The best reason to set aside a movie night.",
+];
+
+function genreName(genre) {
+  return t(MOVIE_GENRES[genre], ENGLISH_GENRES[genre]);
+}
 
 const $ = (id) => document.getElementById(id);
 let storageWritable = true;
+let storageMessages;
 let toastTimer;
 const api = readApiConfig();
 const catalog = { query: "", genre: "all", page: 1, totalPages: 0, results: [], loaded: false, loading: false, error: "" };
@@ -37,6 +67,7 @@ let selectionController;
 let selectionRetry;
 let pickerMessage = "";
 let failedPosterPath = null;
+let localizationController;
 
 function readApiConfig() {
   const base = window.MOVIE_NIGHT_CONFIG?.apiBaseUrl;
@@ -49,8 +80,13 @@ function readApiConfig() {
     return { baseUrl: url.href.replace(/\/+$/, ""), error: "" };
   } catch (error) {
     if (!(error instanceof TypeError)) throw error;
-    return { baseUrl: "", error: "La URL del proxy en config.js no es v\u00e1lida. Usa HTTPS (o HTTP en localhost)." };
+    return { baseUrl: "", error: "invalid-url" };
   }
+}
+
+function apiConfigError() {
+  return api.error ? t("La URL del proxy en config.js no es v\u00e1lida. Usa HTTPS (o HTTP en localhost).",
+    "The proxy URL in config.js is invalid. Use HTTPS (or HTTP on localhost).") : "";
 }
 
 function localToday() {
@@ -65,7 +101,7 @@ function freshState() {
     plans: [],
     theme: "spooky",
     draft: { movieId: null, foodId: null, date: localToday(), place: "" },
-    preferences: { genre: "all", pendingOnly: true, autoFood: true, movieTab: "pending", planTab: "scheduled", view: "catalog" },
+    preferences: { language: "es-MX", genre: "all", pendingOnly: true, autoFood: true, movieTab: "pending", planTab: "scheduled", view: "catalog" },
   };
 }
 
@@ -111,7 +147,16 @@ function isTmdbData(movie) {
     && isPosterPath(movie.posterPath) && isStringList(movie.cast, 12, 120)
     && isStringList(movie.directors, 6, 120) && isStringList(movie.genres, 20, 80)
     && typeof movie.originalTitle === "string" && movie.originalTitle.length <= 300
-    && (movie.rating === null || (Number.isFinite(movie.rating) && movie.rating >= 0 && movie.rating <= 10));
+    && (movie.rating === null || (Number.isFinite(movie.rating) && movie.rating >= 0 && movie.rating <= 10))
+    && (movie.language === undefined || LANGUAGES.includes(movie.language));
+}
+
+function isLocalizationCache(movie) {
+  if (movie.localizations === undefined) return true;
+  return Boolean(movie.tmdbId) && isRecord(movie.localizations)
+    && Object.entries(movie.localizations).every(([language, data]) => LANGUAGES.includes(language)
+      && isTmdbData(data) && data.language === language && data.tmdbId === movie.tmdbId
+      && data.id === `tmdb-${movie.tmdbId}` && data.localizations === undefined);
 }
 
 // Validate stored data and references before rendering. Damaged data is never overwritten.
@@ -122,7 +167,7 @@ function isValidState(value) {
 
   const validMovies = value.movies.every((movie) => isMovieData(movie)
     && typeof movie.watched === "boolean" && typeof movie.custom === "boolean"
-    && (movie.tmdbId === undefined || isTmdbData(movie)));
+    && (movie.tmdbId === undefined || isTmdbData(movie)) && isLocalizationCache(movie));
   if (!validMovies) return false;
 
   const movieIds = new Set(value.movies.map((movie) => movie.id));
@@ -145,11 +190,13 @@ function isValidState(value) {
     && ["pending", "watched"].includes(preferences.movieTab)
     && ["scheduled", "completed"].includes(preferences.planTab)
     && (preferences.view === undefined || ["plans", "movies", "catalog"].includes(preferences.view))
-    && (preferences.source === undefined || ["catalog", "collection"].includes(preferences.source));
+    && (preferences.source === undefined || ["catalog", "collection"].includes(preferences.source))
+    && (preferences.language === undefined || LANGUAGES.includes(preferences.language));
 }
 
-function storageWarning(message, error) {
-  $("storage-notice").textContent = message;
+function storageWarning(messages, error) {
+  storageMessages = messages;
+  $("storage-notice").textContent = t(...messages);
   $("storage-notice").hidden = false;
   if (error) console.error("Movie Night: localStorage", error);
 }
@@ -160,12 +207,14 @@ function decodeState(raw) {
     parsed = JSON.parse(raw);
   } catch (error) {
     storageWritable = false;
-    storageWarning("No se pudieron leer tus datos guardados. Para no sobrescribirlos, los cambios de esta sesi\u00f3n no se guardar\u00e1n.", error);
+    storageWarning(["No se pudieron leer tus datos guardados. Para no sobrescribirlos, los cambios de esta sesi\u00f3n no se guardar\u00e1n.",
+      "Your saved data could not be read. To avoid overwriting it, changes in this session will not be saved."], error);
     return null;
   }
   if (!isValidState(parsed)) {
     storageWritable = false;
-    storageWarning("Tus datos guardados tienen un formato no compatible. Se han conservado intactos; los cambios de esta sesi\u00f3n no se guardar\u00e1n.");
+    storageWarning(["Tus datos guardados tienen un formato no compatible. Se han conservado intactos; los cambios de esta sesi\u00f3n no se guardar\u00e1n.",
+      "Your saved data has an incompatible format. It has been preserved; changes in this session will not be saved."]);
     return null;
   }
   return parsed;
@@ -176,20 +225,23 @@ function loadState() {
   try {
     raw = localStorage.getItem(STORAGE_KEY);
   } catch (error) {
-    storageWarning("Este navegador no permite leer el almacenamiento local. Tus cambios podr\u00edan perderse al cerrar la p\u00e1gina.", error);
+    storageWarning(["Este navegador no permite leer el almacenamiento local. Tus cambios podr\u00edan perderse al cerrar la p\u00e1gina.",
+      "This browser does not allow access to local storage. Your changes may be lost when you close the page."], error);
     return freshState();
   }
   return raw === null ? freshState() : (decodeState(raw) ?? freshState());
 }
 
 let state = loadState();
+activeLanguage = state.preferences.language ?? "es-MX";
 
 function persistState() {
   if (!storageWritable) return false;
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
   } catch (error) {
-    storageWarning("No se pudieron guardar los cambios en este navegador. Por ahora solo est\u00e1n en esta pesta\u00f1a. Revisa el espacio o los permisos de almacenamiento.", error);
+    storageWarning(["No se pudieron guardar los cambios en este navegador. Por ahora solo est\u00e1n en esta pesta\u00f1a. Revisa el espacio o los permisos de almacenamiento.",
+      "Changes could not be saved in this browser. They are only in this tab. Check storage space or permissions."], error);
     return false;
   }
   $("storage-notice").hidden = true;
@@ -207,8 +259,23 @@ function movieById(id) {
   return state.movies.find((movie) => movie.id === id);
 }
 
+function movieDisplay(movie) {
+  if (!movie) return movie;
+  const localized = movie.localizations?.[activeLanguage];
+  return localized ? { ...movie, ...localized, id: movie.id, genre: movie.genre, watched: movie.watched, custom: movie.custom }
+    : movie.custom && CUSTOM_MOVIE_DESCRIPTIONS.includes(movie.description)
+      ? { ...movie, description: customMovieDescription() } : movie;
+}
+
+function customMovieDescription() {
+  return t(...CUSTOM_MOVIE_DESCRIPTIONS);
+}
+
 function foodById(id) {
-  return FOODS.find((food) => food.id === id);
+  const food = FOODS.find((food) => food.id === id);
+  if (!food || activeLanguage !== "en-US") return food;
+  const [name, description] = ENGLISH_FOODS[id];
+  return { ...food, name, description };
 }
 
 function candidates() {
@@ -223,9 +290,11 @@ function movieSource() {
 
 class MovieApiError extends Error {}
 
-async function apiRequest(path, params, signal) {
-  if (!api.baseUrl) throw new MovieApiError("Configura la URL del proxy para conectar el cat\u00e1logo TMDB.");
+async function apiRequest(path, params, signal, language = activeLanguage) {
+  if (!api.baseUrl) throw new MovieApiError(t("Configura la URL del proxy para conectar el cat\u00e1logo TMDB.",
+    "Configure the proxy URL to connect to the TMDB catalog."));
   const url = new URL(`${api.baseUrl}${path}`);
+  url.searchParams.set("language", language);
   Object.entries(params).forEach(([key, value]) => url.searchParams.set(key, String(value)));
   let response;
   try {
@@ -237,8 +306,9 @@ async function apiRequest(path, params, signal) {
     });
   } catch (error) {
     if (signal?.aborted) throw error;
-    if (error.name === "TimeoutError") throw new MovieApiError("TMDB est\u00e1 tardando demasiado. Vuelve a intentarlo.");
-    if (error instanceof TypeError) throw new MovieApiError("No se pudo conectar con el cat\u00e1logo. Revisa la conexi\u00f3n y la configuraci\u00f3n del proxy.");
+    if (error.name === "TimeoutError") throw new MovieApiError(t("TMDB est\u00e1 tardando demasiado. Vuelve a intentarlo.", "TMDB is taking too long. Try again."));
+    if (error instanceof TypeError) throw new MovieApiError(t("No se pudo conectar con el cat\u00e1logo. Revisa la conexi\u00f3n y la configuraci\u00f3n del proxy.",
+      "Could not connect to the catalog. Check your connection and proxy configuration."));
     throw error;
   }
   let data;
@@ -246,40 +316,45 @@ async function apiRequest(path, params, signal) {
     data = await response.json();
   } catch (error) {
     if (signal?.aborted) throw error;
-    if (["TimeoutError", "AbortError"].includes(error.name)) throw new MovieApiError("TMDB est\u00e1 tardando demasiado. Vuelve a intentarlo.");
-    if (error instanceof TypeError) throw new MovieApiError("Se interrumpi\u00f3 la descarga de la ficha. Vuelve a intentarlo.");
+    if (["TimeoutError", "AbortError"].includes(error.name)) throw new MovieApiError(t("TMDB est\u00e1 tardando demasiado. Vuelve a intentarlo.", "TMDB is taking too long. Try again."));
+    if (error instanceof TypeError) throw new MovieApiError(t("Se interrumpi\u00f3 la descarga de la ficha. Vuelve a intentarlo.", "The movie download was interrupted. Try again."));
     if (!(error instanceof SyntaxError)) throw error;
-    throw new MovieApiError("El proxy no devolvi\u00f3 datos v\u00e1lidos. Revisa su URL y vuelve a intentarlo.");
+    throw new MovieApiError(t("El proxy no devolvi\u00f3 datos v\u00e1lidos. Revisa su URL y vuelve a intentarlo.", "The proxy returned invalid data. Check its URL and try again."));
   }
   if (!response.ok) {
     throw new MovieApiError(isRecord(data) && isText(data.error, 500)
-      ? data.error : `No se pudo consultar TMDB (HTTP ${response.status}). Int\u00e9ntalo de nuevo.`);
+      ? data.error : t(`No se pudo consultar TMDB (HTTP ${response.status}). Int\u00e9ntalo de nuevo.`,
+        `Could not query TMDB (HTTP ${response.status}). Try again.`));
   }
   return data;
 }
 
-async function fetchCatalogPage(query, genre, page, signal) {
-  const data = await apiRequest("/movies", { query, genre, page }, signal);
+async function fetchCatalogPage(query, genre, page, signal, language = activeLanguage) {
+  const data = await apiRequest("/movies", { query, genre, page }, signal, language);
   if (!isRecord(data) || data.page !== page || !Number.isInteger(data.totalPages)
     || data.totalPages < 0 || data.totalPages > 500 || !Number.isInteger(data.totalResults) || data.totalResults < 0
     || !Array.isArray(data.results) || data.results.length > 20
-    || !data.results.every((movie) => isTmdbData(movie) && movie.id === `tmdb-${movie.tmdbId}`)) {
-    throw new MovieApiError("El cat\u00e1logo devolvi\u00f3 un formato no compatible.");
+    || !data.results.every((movie) => isTmdbData(movie) && movie.id === `tmdb-${movie.tmdbId}` && movie.language === language)) {
+    throw new MovieApiError(t("El cat\u00e1logo devolvi\u00f3 un formato no compatible. Actualiza el proxy para habilitar los idiomas.",
+      "The catalog returned an incompatible format. Update the proxy to enable languages."));
   }
   return data;
 }
 
-async function fetchMovieDetails(tmdbId, signal) {
-  const data = await apiRequest(`/movies/${tmdbId}`, {}, signal);
+async function fetchMovieDetails(tmdbId, signal, language = activeLanguage) {
+  const data = await apiRequest(`/movies/${tmdbId}`, {}, signal, language);
   if (!isRecord(data) || !isTmdbData(data.movie) || data.movie.tmdbId !== tmdbId
-    || data.movie.id !== `tmdb-${tmdbId}`) throw new MovieApiError("No se pudo leer la ficha de esta pel\u00edcula.");
+    || data.movie.id !== `tmdb-${tmdbId}` || data.movie.language !== language) {
+    throw new MovieApiError(t("No se pudo leer la ficha en el idioma elegido. Actualiza el proxy para habilitar los idiomas.",
+      "Could not read the movie in the selected language. Update the proxy to enable languages."));
+  }
   return data.movie;
 }
 
 function apiErrorMessage(error) {
   if (error instanceof MovieApiError) return error.message;
   console.error("Movie Night: catalog", error);
-  return "No se pudo cargar la pel\u00edcula. Int\u00e9ntalo de nuevo.";
+  return t("No se pudo cargar la pel\u00edcula. Int\u00e9ntalo de nuevo.", "Could not load the movie. Try again.");
 }
 
 async function loadCatalog(page = 1) {
@@ -307,16 +382,20 @@ function renderCatalog() {
   const configured = Boolean(api.baseUrl);
   $("catalog-search").disabled = !configured;
   $("catalog-list").setAttribute("aria-busy", String(catalog.loading));
-  $("catalog-status").textContent = !configured ? (api.error || "Conecta el proxy TMDB para explorar pel\u00edculas. Consulta el aviso de configuraci\u00f3n.")
-    : catalog.loading ? "Buscando pel\u00edculas en TMDB\u2026"
-    : catalog.error || (catalog.results.length ? `${catalog.totalResults.toLocaleString("es")} resultados en TMDB.`
-      : catalog.loaded ? "No encontramos pel\u00edculas. Prueba otro t\u00edtulo o universo." : "Busca un t\u00edtulo o descubre pel\u00edculas populares.");
+  $("catalog-status").textContent = !configured ? (apiConfigError() || t("Conecta el proxy TMDB para explorar pel\u00edculas. Consulta el aviso de configuraci\u00f3n.",
+    "Connect the TMDB proxy to explore movies. See the setup notice."))
+    : catalog.loading ? t("Buscando pel\u00edculas en TMDB\u2026", "Searching TMDB\u2026")
+    : catalog.error || (catalog.results.length ? t(`${catalog.totalResults.toLocaleString(activeLanguage)} resultados en TMDB.`,
+      `${catalog.totalResults.toLocaleString(activeLanguage)} results on TMDB.`)
+      : catalog.loaded ? t("No encontramos pel\u00edculas. Prueba otro t\u00edtulo o universo.", "No movies found. Try another title or universe.")
+      : t("Busca un t\u00edtulo o descubre pel\u00edculas populares.", "Search for a title or discover popular movies."));
   $("catalog-retry").hidden = !catalog.error || catalog.loading || !configured;
   const fragment = document.createDocumentFragment();
   catalog.results.forEach((movie) => {
     const row = $("catalog-row-template").content.firstElementChild.cloneNode(true);
+    translateInterface(row);
     row.querySelector(".catalog-title").textContent = movie.title;
-    row.querySelector(".catalog-meta").textContent = [movie.year ?? "A\u00f1o no disponible", MOVIE_GENRES[movie.genre]].join(" \u00b7 ");
+    row.querySelector(".catalog-meta").textContent = [movie.year ?? t("A\u00f1o no disponible", "Year unavailable"), genreName(movie.genre)].join(" \u00b7 ");
     row.querySelector(".catalog-description").textContent = movie.description;
     const poster = row.querySelector(".catalog-poster");
     if (movie.posterPath) {
@@ -327,34 +406,114 @@ function renderCatalog() {
     const choose = row.querySelector(".choose-catalog-movie");
     const existing = savedApiMovie(movie);
     choose.dataset.tmdbId = movie.tmdbId;
-    choose.textContent = existing ? "Elegir de mi colecci\u00f3n" : "Elegir y guardar";
-    choose.setAttribute("aria-label", `Elegir ${movie.title}${movie.year ? ` (${movie.year})` : ""} para mi plan`);
+    choose.textContent = existing ? t("Elegir de mi colecci\u00f3n", "Choose from my collection") : t("Elegir y guardar", "Choose and save");
+    const title = `${movie.title}${movie.year ? ` (${movie.year})` : ""}`;
+    choose.setAttribute("aria-label", t(`Elegir ${title} para mi plan`, `Choose ${title} for my plan`));
     fragment.append(row);
   });
   $("catalog-list").replaceChildren(fragment);
   $("catalog-pagination").hidden = catalog.loading || Boolean(catalog.error) || catalog.totalPages < 2;
   $("catalog-previous").disabled = catalog.page <= 1 || catalog.loading;
   $("catalog-next").disabled = catalog.page >= catalog.totalPages || catalog.loading;
-  $("catalog-page").textContent = `P\u00e1gina ${catalog.page} de ${catalog.totalPages}`;
+  $("catalog-page").textContent = t(`P\u00e1gina ${catalog.page} de ${catalog.totalPages}`, `Page ${catalog.page} of ${catalog.totalPages}`);
 }
 
-// Match legacy entries only when title AND release year agree; IDs keep existing plans intact.
+// Match legacy entries only by a known title AND year; IDs keep existing plans intact.
 function savedApiMovie(movie) {
   return state.movies.find((saved) => saved.tmdbId === movie.tmdbId)
-    ?? state.movies.find((saved) => !saved.tmdbId && movie.year !== null && saved.year === movie.year
-      && normalizedTitle(saved.title) === normalizedTitle(movie.title));
+    ?? state.movies.find((saved) => !saved.tmdbId && !saved.custom && movie.year !== null && saved.year === movie.year
+      && [movie.title, movie.originalTitle].filter(Boolean)
+        .some((title) => normalizedTitle(saved.title) === normalizedTitle(title)));
 }
 
 function saveApiMovie(movie, genre) {
   const existing = savedApiMovie(movie);
+  const localizations = { ...existing?.localizations };
+  if (movie.language) localizations[movie.language] = { ...movie };
   if (existing) {
     const { id, watched, genre: savedGenre } = existing;
-    Object.assign(existing, movie, { id, watched, genre: savedGenre, custom: false });
+    Object.assign(existing, movie, { id, watched, genre: savedGenre, custom: false, localizations });
     return existing;
   }
-  const saved = { ...movie, genre: genre ?? movie.genre, watched: false, custom: false };
+  const saved = { ...movie, genre: genre ?? movie.genre, watched: false, custom: false, localizations };
   state.movies.push(saved);
   return saved;
+}
+
+function resetCatalogLanguage() {
+  catalogController?.abort();
+  catalogController = null;
+  Object.assign(catalog, { page: 1, totalPages: 0, results: [], loaded: false, loading: false, error: "" });
+}
+
+async function refreshMovieLanguages() {
+  localizationController?.abort();
+  const controller = new AbortController();
+  localizationController = controller;
+  const language = activeLanguage;
+  const missing = state.movies.filter((movie) => movie.tmdbId && !movie.localizations?.[language])
+    .sort((a, b) => Number(b.id === state.draft.movieId) - Number(a.id === state.draft.movieId));
+  $("language-retry").hidden = true;
+  $("language-status").hidden = missing.length === 0;
+  if (!missing.length) {
+    localizationController = null;
+    return;
+  }
+  if (!api.baseUrl) {
+    $("language-status").textContent = t(
+      "Conecta el proxy para traducir las pel\u00edculas guardadas. Mientras tanto se muestran sus datos disponibles.",
+      "Connect the proxy to translate saved movies. Their available details are shown in the meantime.");
+    localizationController = null;
+    return;
+  }
+  $("language-status").textContent = t("Actualizando t\u00edtulos y p\u00f3sters de tu colecci\u00f3n\u2026",
+    "Updating titles and posters in your collection\u2026");
+  let failure = "";
+  // Keep requests bounded for large collections; cancelled languages never update storage.
+  for (const movie of missing) {
+    let details;
+    try {
+      details = await fetchMovieDetails(movie.tmdbId, controller.signal, language);
+    } catch (error) {
+      if (controller.signal.aborted) return;
+      failure = apiErrorMessage(error);
+      continue;
+    }
+    if (controller.signal.aborted) return;
+    if (movieById(movie.id)) {
+      saveApiMovie(details);
+      persistState();
+      renderPicker();
+      renderMovies();
+      renderPlans();
+    }
+  }
+  if (controller.signal.aborted) return;
+  localizationController = null;
+  $("language-status").hidden = !failure;
+  $("language-status").textContent = failure ? `${t(
+    "No se pudieron actualizar todas las traducciones. Se conservan los datos disponibles.",
+    "Not all translations could be updated. Available details have been kept.")} ${failure}` : "";
+  $("language-retry").hidden = !failure;
+}
+
+function changeLanguage(language) {
+  if (!LANGUAGES.includes(language)) {
+    notify(t("Elige un idioma disponible.", "Choose an available language."));
+    $("language").value = activeLanguage;
+    return;
+  }
+  cancelSelection();
+  resetCatalogLanguage();
+  localizationController?.abort();
+  activeLanguage = language;
+  state.preferences.language = language;
+  failedPosterPath = null;
+  $("toast").hidden = true;
+  ["new-movie-title", "plan-date", "plan-place"].forEach((id) => $(id).setCustomValidity(""));
+  persistState();
+  renderAll();
+  return refreshMovieLanguages();
 }
 
 function cancelSelection() {
@@ -368,7 +527,7 @@ async function selectFromApi(loadMovie, retry, { genre = null, forceFood = false
   cancelSelection();
   const controller = new AbortController();
   selectionController = controller;
-  pickerMessage = "Cargando la ficha de la pel\u00edcula\u2026";
+  pickerMessage = t("Cargando la ficha de la pel\u00edcula\u2026", "Loading movie details\u2026");
   renderPicker();
   if (focus) $("planner").scrollIntoView({ block: "start" });
   let movie;
@@ -397,12 +556,13 @@ async function selectFromApi(loadMovie, retry, { genre = null, forceFood = false
     $("planner").scrollIntoView({ block: "start" });
     $("movie-title").focus({ preventScroll: true });
   }
-  notify(saved ? `${savedMovie.title}: lista para tu pr\u00f3ximo plan.` : "Pel\u00edcula elegida solo para esta sesi\u00f3n.");
+  notify(saved ? t(`${savedMovie.title}: lista para tu pr\u00f3ximo plan.`, `${savedMovie.title}: ready for your next plan.`)
+    : t("Pel\u00edcula elegida solo para esta sesi\u00f3n.", "Movie selected for this session only."));
 }
 
 function chooseCatalogMovie(movie) {
   const existing = savedApiMovie(movie);
-  if (existing?.tmdbId) {
+  if (existing?.localizations?.[activeLanguage]) {
     selectMovie(existing.id);
     return;
   }
@@ -413,23 +573,27 @@ function chooseCatalogMovie(movie) {
 
 async function randomApiMovie(signal) {
   const { genre, pendingOnly } = state.preferences;
-  const firstPage = await fetchCatalogPage("", genre, 1, signal);
+  const language = activeLanguage;
+  const firstPage = await fetchCatalogPage("", genre, 1, signal, language);
+  signal.throwIfAborted();
   const remainingPages = Array.from({ length: firstPage.totalPages }, (_, index) => index + 1);
   const previous = movieById(state.draft.movieId);
   // Sample different pages, not just the first popular results. Bound retries for watched-heavy collections.
   for (let attempt = 0; attempt < 5 && remainingPages.length; attempt += 1) {
     const index = Math.floor(Math.random() * remainingPages.length);
     const [page] = remainingPages.splice(index, 1);
-    const data = page === 1 ? firstPage : await fetchCatalogPage("", genre, page, signal);
+    const data = page === 1 ? firstPage : await fetchCatalogPage("", genre, page, signal, language);
+    signal.throwIfAborted();
     const options = data.results.filter((movie) => {
       const saved = savedApiMovie(movie);
       return (!pendingOnly || !saved?.watched)
         && (!previous || (movie.tmdbId !== previous.tmdbId && saved?.id !== previous.id));
     });
     const movie = pickRandom(options, null);
-    if (movie) return fetchMovieDetails(movie.tmdbId, signal);
+    if (movie) return fetchMovieDetails(movie.tmdbId, signal, language);
   }
-  throw new MovieApiError("No encontramos otra pel\u00edcula en las p\u00e1ginas consultadas. Reintenta, cambia de universo o desactiva Solo pendientes.");
+  throw new MovieApiError(t("No encontramos otra pel\u00edcula en las p\u00e1ginas consultadas. Reintenta, cambia de universo o desactiva Solo pendientes.",
+    "No other movie found on the sampled pages. Try again, change universe, or turn off Unwatched only."));
 }
 
 // Avoid immediate repeats when at least two choices exist; a single choice remains valid.
@@ -447,7 +611,8 @@ function randomMovie(forceFood = false) {
   cancelSelection();
   const movie = pickRandom(candidates(), state.draft.movieId);
   if (!movie) {
-    notify("No hay pel\u00edculas con estos filtros. Cambia de universo, incluye las vistas o a\u00f1ade una nueva.");
+    notify(t("No hay pel\u00edculas con estos filtros. Cambia de universo, incluye las vistas o a\u00f1ade una nueva.",
+      "No movies match these filters. Change universe, include watched movies, or add a new one."));
     return null;
   }
   state.draft.movieId = movie.id;
@@ -471,7 +636,8 @@ function selectMovie(id) {
   cancelSelection();
   const movie = movieById(id);
   if (!movie) {
-    notify("No se encontr\u00f3 esa pel\u00edcula. Vuelve a elegir una de tu colecci\u00f3n.");
+    notify(t("No se encontr\u00f3 esa pel\u00edcula. Vuelve a elegir una de tu colecci\u00f3n.",
+      "Movie not found. Choose another from your collection."));
     return;
   }
   state.draft.movieId = id;
@@ -480,31 +646,33 @@ function selectMovie(id) {
   renderPicker();
   $("planner").scrollIntoView({ block: "start" });
   $("movie-title").focus({ preventScroll: true });
-  notify(`${movie.title}: lista para tu pr\u00f3ximo plan.`);
+  const title = movieDisplay(movie).title;
+  notify(t(`${title}: lista para tu pr\u00f3ximo plan.`, `${title}: ready for your next plan.`));
 }
 
 function renderPicker() {
-  const movie = movieById(state.draft.movieId);
+  const movie = movieDisplay(movieById(state.draft.movieId));
   const food = foodById(state.draft.foodId);
   const count = candidates().length;
   const online = movieSource() === "catalog";
   const busy = Boolean(selectionController);
-  $("movie-badge").textContent = movie ? MOVIE_GENRES[movie.genre].toLocaleUpperCase("es") : "QUE DECIDA EL DESTINO";
-  $("movie-title").textContent = movie ? movie.title : "Tu pr\u00f3xima favorita te espera.";
+  $("movie-badge").textContent = movie ? genreName(movie.genre).toLocaleUpperCase(activeLanguage) : t("QUE DECIDA EL DESTINO", "LET FATE DECIDE");
+  $("movie-title").textContent = movie ? movie.title : t("Tu pr\u00f3xima favorita te espera.", "Your next favorite is waiting.");
   $("movie-meta").textContent = movie
-    ? [movie.year ?? "A\u00f1o no disponible", movie.minutes ? `${movie.minutes} min` : "Duraci\u00f3n no disponible",
-      movie.custom ? "A\u00f1adida por ti" : null, movie.tmdbId && movie.rating !== null ? `TMDB ${movie.rating.toFixed(1)}/10` : null,
-      movie.watched ? "Ya vista" : null].filter(Boolean).join(" \u00b7 ")
-    : online ? "Un cat\u00e1logo entero por descubrir." : `${state.movies.length} pel\u00edculas en tu colecci\u00f3n.`;
-  $("movie-description").textContent = movie ? movie.description : "Pulsa el bot\u00f3n y descubre qu\u00e9 ver esta noche.";
+    ? [movie.year ?? t("A\u00f1o no disponible", "Year unavailable"), movie.minutes ? `${movie.minutes} min` : t("Duraci\u00f3n no disponible", "Runtime unavailable"),
+      movie.custom ? t("A\u00f1adida por ti", "Added by you") : null, movie.tmdbId && movie.rating !== null ? `TMDB ${movie.rating.toFixed(1)}/10` : null,
+      movie.watched ? t("Ya vista", "Watched") : null].filter(Boolean).join(" \u00b7 ")
+    : online ? t("Un cat\u00e1logo entero por descubrir.", "A whole catalog to discover.")
+      : t(`${state.movies.length} pel\u00edculas en tu colecci\u00f3n.`, `${state.movies.length} movies in your collection.`);
+  $("movie-description").textContent = movie ? movie.description : t("Pulsa el bot\u00f3n y descubre qu\u00e9 ver esta noche.", "Press the button and discover what to watch tonight.");
   const details = movie?.tmdbId ? movie : null;
   $("movie-credits").hidden = !details;
-  $("movie-cast").textContent = details?.cast.join(", ") || "Reparto no disponible";
-  $("movie-directors").textContent = details?.directors.join(", ") || "Direcci\u00f3n no disponible";
-  $("movie-genres").textContent = details?.genres.join(", ") || "G\u00e9neros no disponibles";
-  $("movie-original-title").textContent = details?.originalTitle || "No disponible";
+  $("movie-cast").textContent = details?.cast.join(", ") || t("Reparto no disponible", "Cast unavailable");
+  $("movie-directors").textContent = details?.directors.join(", ") || t("Direcci\u00f3n no disponible", "Directors unavailable");
+  $("movie-genres").textContent = details?.genres.join(", ") || t("G\u00e9neros no disponibles", "Genres unavailable");
+  $("movie-original-title").textContent = details?.originalTitle || t("No disponible", "Unavailable");
   $("movie-tmdb-link").hidden = !movie?.tmdbId;
-  if (movie?.tmdbId) $("movie-tmdb-link").href = `https://www.themoviedb.org/movie/${movie.tmdbId}`;
+  if (movie?.tmdbId) $("movie-tmdb-link").href = `https://www.themoviedb.org/movie/${movie.tmdbId}?language=${activeLanguage}`;
   const poster = $("movie-poster");
   const posterPath = movie?.tmdbId ? movie.posterPath : null;
   const showPoster = Boolean(posterPath && posterPath !== failedPosterPath);
@@ -515,25 +683,26 @@ function renderPicker() {
       poster.dataset.path = posterPath;
       poster.src = `https://image.tmdb.org/t/p/w500${posterPath}`;
     }
-    poster.alt = `P\u00f3ster de ${movie.title}`;
+    poster.alt = t(`P\u00f3ster de ${movie.title}`, `Poster for ${movie.title}`);
   } else {
     poster.removeAttribute("src");
     delete poster.dataset.path;
   }
   $("candidate-count").textContent = online
-    ? "Sorpresas del cat\u00e1logo TMDB, no solo de tu colecci\u00f3n."
+    ? t("Sorpresas del cat\u00e1logo TMDB, no solo de tu colecci\u00f3n.", "Surprises from the TMDB catalog, not just your collection.")
     : count
-    ? `${count} ${count === 1 ? "pel\u00edcula" : "pel\u00edculas"} en el bombo`
-    : "Sin opciones. Abre Preferencias o a\u00f1ade una peli en Mi colecci\u00f3n.";
+    ? t(`${count} ${count === 1 ? "pel\u00edcula" : "pel\u00edculas"} en el bombo`, `${count} ${count === 1 ? "movie" : "movies"} to choose from`)
+    : t("Sin opciones. Abre Preferencias o a\u00f1ade una peli en Mi colecci\u00f3n.", "No choices. Open Preferences or add a movie in My collection.");
   $("random-movie").disabled = busy || (online ? !api.baseUrl : count === 0);
   $("picker-status").hidden = !pickerMessage;
   $("picker-status").textContent = pickerMessage;
   $("retry-movie").hidden = !selectionRetry || busy;
-  $("food-name").textContent = food ? food.name : "Comida por elegir";
-  $("food-description").textContent = food ? food.description : "Porque una buena peli merece un buen bocado.";
+  $("food-name").textContent = food ? food.name : t("Comida por elegir", "Food to be chosen");
+  $("food-description").textContent = food ? food.description : t("Porque una buena peli merece un buen bocado.", "Because a great movie deserves a great bite.");
   $("save-plan").disabled = busy || !movie || !food;
-  $("plan-hint").textContent = busy ? "Espera a que termine de cargar la pel\u00edcula."
-    : movie && food ? "Pon fecha y lugar. Lo dem\u00e1s ya est\u00e1." : "Elige una peli y una comida para empezar.";
+  $("plan-hint").textContent = busy ? t("Espera a que termine de cargar la pel\u00edcula.", "Wait for the movie to finish loading.")
+    : movie && food ? t("Pon fecha y lugar. Lo dem\u00e1s ya est\u00e1.", "Set a date and location. Everything else is ready.")
+      : t("Elige una peli y una comida para empezar.", "Choose a movie and food to get started.");
 }
 
 function normalizedTitle(title) {
@@ -545,21 +714,22 @@ function addMovie(event) {
   const input = $("new-movie-title");
   input.setCustomValidity("");
   const title = input.value.trim().replace(/\s+/g, " ");
-  if (!title) input.setCustomValidity("Escribe el t\u00edtulo de una pel\u00edcula.");
+  if (!title) input.setCustomValidity(t("Escribe el t\u00edtulo de una pel\u00edcula.", "Enter a movie title."));
   if (!$("add-movie-form").reportValidity()) return;
   const genre = $("new-movie-genre").value;
   if (!isGenre(genre)) {
-    notify("Elige un universo v\u00e1lido para tu pel\u00edcula.");
+    notify(t("Elige un universo v\u00e1lido para tu pel\u00edcula.", "Choose a valid universe for your movie."));
     return;
   }
-  if (state.movies.some((movie) => normalizedTitle(movie.title) === normalizedTitle(title))) {
-    input.setCustomValidity("Esta pel\u00edcula ya est\u00e1 en tu colecci\u00f3n.");
+  if (state.movies.some((movie) => [movie.title, movie.originalTitle, ...Object.values(movie.localizations ?? {}).map((data) => data.title)].filter(Boolean)
+    .some((savedTitle) => normalizedTitle(savedTitle) === normalizedTitle(title)))) {
+    input.setCustomValidity(t("Esta pel\u00edcula ya est\u00e1 en tu colecci\u00f3n.", "This movie is already in your collection."));
     input.reportValidity();
     return;
   }
   state.movies.push({
     id: crypto.randomUUID(), title, genre, year: null, minutes: null,
-    description: "Una de tus elegidas. El mejor motivo para reservar una noche de pel\u00edcula.",
+    description: customMovieDescription(),
     watched: false, custom: true,
   });
   state.preferences.movieTab = "pending";
@@ -568,13 +738,14 @@ function addMovie(event) {
   closeAddMovie();
   renderMovies();
   renderPicker();
-  notify(saved ? `"${title}" ya est\u00e1 en pendientes.` : "Pel\u00edcula a\u00f1adida solo para esta sesi\u00f3n.");
+  notify(saved ? t(`"${title}" ya est\u00e1 en pendientes.`, `"${title}" is on your unwatched list.`)
+    : t("Pel\u00edcula a\u00f1adida solo para esta sesi\u00f3n.", "Movie added for this session only."));
 }
 
 function toggleWatched(id) {
   const movie = movieById(id);
   if (!movie) {
-    notify("No se encontr\u00f3 la pel\u00edcula que quieres actualizar.");
+    notify(t("No se encontr\u00f3 la pel\u00edcula que quieres actualizar.", "The movie you want to update was not found."));
     return;
   }
   const activeIndex = [...$("movie-list").children].findIndex((row) => row.contains(document.activeElement));
@@ -583,7 +754,9 @@ function toggleWatched(id) {
   renderMovies();
   renderPicker();
   if (activeIndex >= 0) focusAfterRemoval("movie-list", ".watch-toggle", activeIndex, `[data-movie-tab="${state.preferences.movieTab}"]`);
-  notify(movie.watched ? `"${movie.title}" pasa a ya vistas.` : `"${movie.title}" vuelve a pendientes.`);
+  const title = movieDisplay(movie).title;
+  notify(movie.watched ? t(`"${title}" pasa a ya vistas.`, `"${title}" is now watched.`)
+    : t(`"${title}" vuelve a pendientes.`, `"${title}" is unwatched again.`));
 }
 
 function renderMovies() {
@@ -599,36 +772,39 @@ function renderMovies() {
   // Custom additions appear first so the result is visible even in a long collection.
   movies.sort((a, b) => Number(b.custom) - Number(a.custom));
   const fragment = document.createDocumentFragment();
-  movies.forEach((movie) => {
+  movies.map(movieDisplay).forEach((movie) => {
     const row = $("movie-row-template").content.firstElementChild.cloneNode(true);
+    translateInterface(row);
     row.querySelector(".movie-row-title").textContent = movie.title;
-    row.querySelector(".movie-row-meta").textContent = [MOVIE_GENRES[movie.genre], movie.year,
-      movie.minutes ? `${movie.minutes} min` : null, movie.tmdbId ? "TMDB" : movie.custom ? "A\u00f1adida por ti" : null].filter(Boolean).join(" \u00b7 ");
+    row.querySelector(".movie-row-meta").textContent = [genreName(movie.genre), movie.year,
+      movie.minutes ? `${movie.minutes} min` : null, movie.tmdbId ? "TMDB" : movie.custom ? t("A\u00f1adida por ti", "Added by you") : null].filter(Boolean).join(" \u00b7 ");
     const watch = row.querySelector(".watch-toggle");
     watch.dataset.id = movie.id;
     watch.setAttribute("aria-pressed", String(movie.watched));
-    watch.setAttribute("aria-label", `Marcar ${movie.title} como ${movie.watched ? "pendiente" : "vista"}`);
+    watch.setAttribute("aria-label", t(`Marcar ${movie.title} como ${movie.watched ? "pendiente" : "vista"}`,
+      `Mark ${movie.title} as ${movie.watched ? "unwatched" : "watched"}`));
     const choose = row.querySelector(".choose-movie");
     choose.dataset.id = movie.id;
-    choose.setAttribute("aria-label", `Elegir ${movie.title} para mi plan`);
+    choose.setAttribute("aria-label", t(`Elegir ${movie.title} para mi plan`, `Choose ${movie.title} for my plan`));
     fragment.append(row);
   });
   $("movie-list").replaceChildren(fragment);
-  $("movie-list").setAttribute("aria-label", showWatched ? "Pel\u00edculas ya vistas" : "Pel\u00edculas pendientes");
+  $("movie-list").setAttribute("aria-label", showWatched ? t("Pel\u00edculas ya vistas", "Watched movies") : t("Pel\u00edculas pendientes", "Unwatched movies"));
   $("movie-empty").hidden = movies.length > 0;
-  $("movie-empty-title").textContent = showWatched ? "Aqu\u00ed ir\u00e1n tus historias vividas." : "\u00a1Te has puesto al d\u00eda!";
-  $("movie-empty-description").textContent = showWatched ? "Marca una pel\u00edcula como vista o completa una movie night." : "A\u00f1ade otra peli o vuelve a disfrutar de una de tus favoritas.";
+  $("movie-empty-title").textContent = showWatched ? t("Aqu\u00ed ir\u00e1n tus historias vividas.", "Your watched stories will appear here.") : t("\u00a1Te has puesto al d\u00eda!", "You're all caught up!");
+  $("movie-empty-description").textContent = showWatched ? t("Marca una pel\u00edcula como vista o completa una movie night.", "Mark a movie as watched or complete a movie night.")
+    : t("A\u00f1ade otra peli o vuelve a disfrutar de una de tus favoritas.", "Add another movie or enjoy a favorite again.");
 }
 
 function savePlan(event) {
   event?.preventDefault();
   if (selectionController) {
-    notify("Espera a que termine de cargar la pel\u00edcula antes de guardar el plan.");
+    notify(t("Espera a que termine de cargar la pel\u00edcula antes de guardar el plan.", "Wait for the movie to finish loading before saving the plan."));
     return;
   }
   const { movieId, foodId } = state.draft;
   if (!movieById(movieId) || !foodById(foodId)) {
-    notify("Elige una pel\u00edcula y una comida antes de guardar el plan.");
+    notify(t("Elige una pel\u00edcula y una comida antes de guardar el plan.", "Choose a movie and food before saving the plan."));
     return;
   }
   const dateInput = $("plan-date");
@@ -637,14 +813,14 @@ function savePlan(event) {
   placeInput.setCustomValidity("");
   const date = dateInput.value;
   const place = placeInput.value.trim();
-  if (!isValidDate(date)) dateInput.setCustomValidity("Elige una fecha v\u00e1lida con un a\u00f1o de cuatro cifras.");
-  if (!place) placeInput.setCustomValidity("Escribe d\u00f3nde ser\u00e1 tu movie night.");
+  if (!isValidDate(date)) dateInput.setCustomValidity(t("Elige una fecha v\u00e1lida con un a\u00f1o de cuatro cifras.", "Choose a valid date with a four-digit year."));
+  if (!place) placeInput.setCustomValidity(t("Escribe d\u00f3nde ser\u00e1 tu movie night.", "Enter the location of your movie night."));
   if (!$("plan-form").reportValidity()) return;
 
   const duplicate = state.plans.some((plan) => plan.movieId === movieId && plan.foodId === foodId
     && plan.date === date && plan.place.toLocaleLowerCase("es") === place.toLocaleLowerCase("es"));
   if (duplicate) {
-    notify("Ese plan ya est\u00e1 en tus movie nights.");
+    notify(t("Ese plan ya est\u00e1 en tus movie nights.", "That plan is already in your movie nights."));
     return;
   }
   state.plans.push({ id: crypto.randomUUID(), movieId, foodId, date, place, completed: false });
@@ -656,13 +832,14 @@ function savePlan(event) {
   const saved = persistState();
   renderPlans();
   renderOrganizer();
-  notify(saved ? "Movie night guardada. Ya tienes algo bueno que esperar." : "Plan creado solo para esta sesi\u00f3n. No se pudo guardar en el navegador.");
+  notify(saved ? t("Movie night guardada. Ya tienes algo bueno que esperar.", "Movie night saved. Something good to look forward to.")
+    : t("Plan creado solo para esta sesi\u00f3n. No se pudo guardar en el navegador.", "Plan created for this session only. It could not be saved in the browser."));
 }
 
 function togglePlan(id) {
   const plan = state.plans.find((item) => item.id === id);
   if (!plan) {
-    notify("No se encontr\u00f3 el plan que quieres actualizar.");
+    notify(t("No se encontr\u00f3 el plan que quieres actualizar.", "The plan you want to update was not found."));
     return;
   }
   const activeIndex = [...$("plan-list").children].findIndex((row) => row.contains(document.activeElement));
@@ -674,22 +851,25 @@ function togglePlan(id) {
   renderMovies();
   renderPicker();
   if (activeIndex >= 0) focusAfterRemoval("plan-list", ".complete-plan", activeIndex, `[data-plan-tab="${state.preferences.planTab}"]`);
-  notify(plan.completed ? "Noche completada y pel\u00edcula marcada como vista." : "Tu noche vuelve a estar programada.");
+  notify(plan.completed ? t("Noche completada y pel\u00edcula marcada como vista.", "Night completed and movie marked as watched.")
+    : t("Tu noche vuelve a estar programada.", "Your night is scheduled again."));
 }
 
 function deletePlan(id) {
   const plan = state.plans.find((item) => item.id === id);
   if (!plan) {
-    notify("No se encontr\u00f3 el plan que quieres eliminar.");
+    notify(t("No se encontr\u00f3 el plan que quieres eliminar.", "The plan you want to delete was not found."));
     return;
   }
-  if (!window.confirm(`\u00bfEliminar el plan de "${movieById(plan.movieId).title}"? La pel\u00edcula seguir\u00e1 en tu colecci\u00f3n.`)) return;
+  const title = movieDisplay(movieById(plan.movieId)).title;
+  if (!window.confirm(t(`\u00bfEliminar el plan de "${title}"? La pel\u00edcula seguir\u00e1 en tu colecci\u00f3n.`,
+    `Delete the plan for "${title}"? The movie will stay in your collection.`))) return;
   const index = [...$("plan-list").children].findIndex((row) => row.contains(document.activeElement));
   state.plans = state.plans.filter((item) => item.id !== id);
   persistState();
   renderPlans();
   focusAfterRemoval("plan-list", ".delete-plan", Math.max(0, index), `[data-plan-tab="${state.preferences.planTab}"]`);
-  notify("Plan eliminado. Tu colecci\u00f3n sigue intacta.");
+  notify(t("Plan eliminado. Tu colecci\u00f3n sigue intacta.", "Plan deleted. Your collection is unchanged."));
 }
 
 function focusAfterRemoval(listId, selector, index, fallback) {
@@ -709,10 +889,10 @@ function renderPlans() {
   });
   const plans = state.plans.filter((plan) => plan.completed === showCompleted)
     .sort((a, b) => showCompleted ? b.date.localeCompare(a.date) : a.date.localeCompare(b.date));
-  const dateFormatter = new Intl.DateTimeFormat("es", { day: "numeric", month: "short", year: "numeric" });
+  const dateFormatter = new Intl.DateTimeFormat(activeLanguage, { day: "numeric", month: "short", year: "numeric" });
   const fragment = document.createDocumentFragment();
   plans.forEach((plan) => {
-    const movie = movieById(plan.movieId);
+    const movie = movieDisplay(movieById(plan.movieId));
     const row = $("plan-row-template").content.firstElementChild.cloneNode(true);
     row.querySelector(".plan-movie-title").textContent = movie.title;
     const time = row.querySelector("time");
@@ -723,25 +903,27 @@ function renderPlans() {
     const toggle = row.querySelector(".complete-plan");
     toggle.dataset.id = plan.id;
     toggle.setAttribute("aria-pressed", String(plan.completed));
-    toggle.setAttribute("aria-label", `${plan.completed ? "Reabrir" : "Completar"} el plan de ${movie.title}`);
-    toggle.querySelector("span").textContent = plan.completed ? "Reabrir" : "Completar";
+    toggle.setAttribute("aria-label", t(`${plan.completed ? "Reabrir" : "Completar"} el plan de ${movie.title}`,
+      `${plan.completed ? "Reopen" : "Complete"} the plan for ${movie.title}`));
+    toggle.querySelector("span").textContent = plan.completed ? t("Reabrir", "Reopen") : t("Completar", "Complete");
     const remove = row.querySelector(".delete-plan");
     remove.dataset.id = plan.id;
-    remove.setAttribute("aria-label", `Eliminar el plan de ${movie.title}`);
+    remove.setAttribute("aria-label", t(`Eliminar el plan de ${movie.title}`, `Delete the plan for ${movie.title}`));
     fragment.append(row);
   });
   $("plan-list").replaceChildren(fragment);
-  $("plan-list").setAttribute("aria-label", showCompleted ? "Movie nights completadas" : "Movie nights programadas");
+  $("plan-list").setAttribute("aria-label", showCompleted ? t("Movie nights completadas", "Completed movie nights") : t("Movie nights programadas", "Scheduled movie nights"));
   $("plans-empty").hidden = plans.length > 0;
-  $("plans-empty-title").textContent = showCompleted ? "Todav\u00eda no hay noches completadas." : "Todav\u00eda no hay planes.";
-  $("plans-empty-description").textContent = showCompleted ? "Cuando completes un plan, aparecer\u00e1 aqu\u00ed." : "Elige una peli y guarda tu primera noche.";
+  $("plans-empty-title").textContent = showCompleted ? t("Todav\u00eda no hay noches completadas.", "No completed nights yet.") : t("Todav\u00eda no hay planes.", "No plans yet.");
+  $("plans-empty-description").textContent = showCompleted ? t("Cuando completes un plan, aparecer\u00e1 aqu\u00ed.", "Completed plans will appear here.")
+    : t("Elige una peli y guarda tu primera noche.", "Choose a movie and save your first night.");
   $("empty-plan-link").hidden = showCompleted;
 }
 
 function renderTheme() {
   document.documentElement.dataset.theme = state.theme;
-  $("theme-label").textContent = GENRES[state.theme];
-  $("art-caption").textContent = MOODS[state.theme];
+  $("theme-label").textContent = genreName(state.theme);
+  $("art-caption").textContent = t(MOODS[state.theme], ENGLISH_MOODS[state.theme]);
   document.querySelectorAll('input[name="theme"]').forEach((input) => { input.checked = input.value === state.theme; });
   document.querySelector('meta[name="theme-color"]').content = getComputedStyle(document.documentElement).getPropertyValue("--page").trim();
 }
@@ -775,6 +957,10 @@ function renderOrganizer() {
 }
 
 function renderAll() {
+  document.documentElement.lang = activeLanguage;
+  $("language").value = activeLanguage;
+  translateInterface();
+  if (storageMessages && !$("storage-notice").hidden) $("storage-notice").textContent = t(...storageMessages);
   renderTheme();
   renderPicker();
   renderMovies();
@@ -782,7 +968,7 @@ function renderAll() {
   renderCatalog();
   renderOrganizer();
   $("api-setup-notice").hidden = Boolean(api.baseUrl);
-  if (api.error) $("catalog-status").textContent = api.error;
+  if (api.error) $("catalog-status").textContent = apiConfigError();
   $("movie-source").value = movieSource();
   $("movie-genre").value = state.preferences.genre;
   $("pending-only").checked = state.preferences.pendingOnly;
@@ -792,6 +978,8 @@ function renderAll() {
 }
 
 // Delegated list events continue working after templates are re-rendered.
+$("language").addEventListener("change", (event) => changeLanguage(event.target.value));
+$("language-retry").addEventListener("click", refreshMovieLanguages);
 $("random-movie").addEventListener("click", () => randomMovie());
 $("random-food").addEventListener("click", randomFood);
 $("retry-movie").addEventListener("click", () => selectionRetry?.());
@@ -839,7 +1027,7 @@ $("catalog-list").addEventListener("click", (event) => {
   if (!button) return;
   const movie = catalog.results.find((item) => item.tmdbId === Number(button.dataset.tmdbId));
   if (movie) chooseCatalogMovie(movie);
-  else notify("Los resultados han cambiado. Vuelve a elegir una pel\u00edcula.");
+  else notify(t("Los resultados han cambiado. Vuelve a elegir una pel\u00edcula.", "Results have changed. Choose a movie again."));
 });
 $("plan-form").addEventListener("submit", savePlan);
 ["plan-date", "plan-place"].forEach((id) => {
@@ -938,11 +1126,17 @@ window.addEventListener("storage", (event) => {
   const updated = event.newValue === null ? freshState() : decodeState(event.newValue);
   if (!updated) return;
   cancelSelection();
+  localizationController?.abort();
+  const language = updated.preferences.language ?? "es-MX";
+  if (language !== activeLanguage) resetCatalogLanguage();
   state = updated;
+  activeLanguage = language;
   storageWritable = true;
   $("storage-notice").hidden = true;
   renderAll();
-  notify("La colecci\u00f3n se ha actualizado desde otra pesta\u00f1a.");
+  refreshMovieLanguages();
+  notify(t("La colecci\u00f3n se ha actualizado desde otra pesta\u00f1a.", "Your collection was updated from another tab."));
 });
 
 renderAll();
+refreshMovieLanguages();

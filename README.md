@@ -219,6 +219,18 @@ Pages publishes the static frontend, not the Worker. Deploy Worker changes with
 Wrangler separately. All frontend asset paths are relative, so the app also works
 under a custom domain; update the Worker origin allowlist when changing domains.
 
+### Update the Worker with Copilot
+
+The repository includes the [update-worker skill](.github/skills/update-worker/SKILL.md)
+to decide when backend changes need deployment and guide the Wrangler update,
+including D1 migrations when needed, secret handling, and post-deployment checks.
+It blocks deployments from branches missing the latest `origin/main` and
+coordinates with concurrent deployments to avoid removing published party support.
+Ask Copilot: **"Usa la skill update-worker para actualizar el worker si hace falta."**
+The skill requests deployment authorization when it is not already explicit;
+it does not schedule automatic updates or redeploy for frontend-only or
+documentation changes.
+
 ## Using the app
 
 - **Explorar** browses popular movies, searches by title, and pages through

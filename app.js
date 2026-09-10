@@ -13,6 +13,10 @@ const MOVIE_GENRES = {
   fantasy: "Fantas\u00eda",
   general: "Otros g\u00e9neros",
 };
+const ENGLISH_GENRES = {
+  spooky: "Horror and mystery", cozy: "Comedy, romance, and family",
+  "sci-fi": "Science fiction", fantasy: "Fantasy", general: "Other genres",
+};
 const FOODS = [
   { id: "pizza", name: "Pizza para compartir", description: "Tu favorita, reci\u00e9n hecha. La \u00faltima porci\u00f3n se negocia." },
   { id: "popcorn", name: "Palomitas de cine", description: "Dulces o saladas. El cl\u00e1sico que nunca falla." },
@@ -23,10 +27,30 @@ const FOODS = [
   { id: "hot-chocolate", name: "Chocolate y galletas", description: "Chocolate caliente y galletas para compartir." },
   { id: "sandwiches", name: "S\u00e1ndwiches a la plancha", description: "Pan crujiente, queso fundido y comodidad en cada bocado." },
 ];
+const ENGLISH_FOODS = {
+  pizza: ["Pizza to share", "Your favorite, fresh from the oven. The last slice is negotiable."],
+  popcorn: ["Movie popcorn", "Sweet or salty. A classic that never fails."],
+  pasta: ["A good plate of pasta", "Your favorite sauce and an easy night in."],
+  snacks: ["Snack board", "Some cheese, fruit, crackers, and whatever you love."],
+  nachos: ["Nachos with guacamole", "Crunchy, made for sharing, with extra guacamole."],
+  burgers: ["Homemade burgers", "Add some fries and the plan is complete."],
+  "hot-chocolate": ["Hot chocolate and cookies", "Hot chocolate and cookies to share."],
+  sandwiches: ["Grilled sandwiches", "Crispy bread, melted cheese, and comfort in every bite."],
+};
+const CUSTOM_MOVIE_DESCRIPTIONS = [
+  "Una de tus elegidas. El mejor motivo para reservar una noche de pel\u00edcula.",
+  "One of your picks. The best reason to set aside a movie night.",
+];
+
+function genreName(genre) {
+  return t(MOVIE_GENRES[genre], ENGLISH_GENRES[genre]);
+}
 
 const $ = (id) => document.getElementById(id);
 let storageWritable = true;
 let toastTimer;
+let storageMessages;
+let toastMessages;
 const api = readApiConfig();
 const catalog = { query: "", genre: "all", language: "es-ES", page: 1, totalPages: 0, results: [], loaded: false, loading: false, error: "" };
 let catalogController;
@@ -36,6 +60,11 @@ let pickerMessage = "";
 let failedPosterPath = null;
 let renderedCastKey;
 const localizedMovies = new Map();
+let localizationController;
+let localizationPromise;
+let localizationContext = "";
+let localizationMessage = "";
+const localizationFailures = new Map();
 
 function readApiConfig() {
   const base = window.MOVIE_NIGHT_CONFIG?.apiBaseUrl;
@@ -48,7 +77,10 @@ function readApiConfig() {
     return { baseUrl: url.href.replace(/\/+$/, ""), error: "" };
   } catch (error) {
     if (!(error instanceof TypeError)) throw error;
-    return { baseUrl: "", error: "La URL del proxy en config.js no es v\u00e1lida. Usa HTTPS (o HTTP en localhost)." };
+    return { baseUrl: "", error: [
+      "La URL del proxy en config.js no es v\u00e1lida. Usa HTTPS (o HTTP en localhost).",
+      "The proxy URL in config.js is invalid. Use HTTPS (or HTTP on localhost).",
+    ] };
   }
 }
 
@@ -161,7 +193,8 @@ function isValidState(value) {
 }
 
 function storageWarning(message, error) {
-  $("storage-notice").textContent = message;
+  storageMessages = message;
+  $("storage-notice").textContent = localizedText(message);
   $("storage-notice").hidden = false;
   if (error) console.error("Movie Night: localStorage", error);
 }
@@ -172,12 +205,14 @@ function decodeState(raw) {
     parsed = JSON.parse(raw);
   } catch (error) {
     storageWritable = false;
-    storageWarning("No se pudieron leer tus datos guardados. Para no sobrescribirlos, los cambios de esta sesi\u00f3n no se guardar\u00e1n.", error);
+    storageWarning(["No se pudieron leer tus datos guardados. Para no sobrescribirlos, los cambios de esta sesi\u00f3n no se guardar\u00e1n.",
+      "Your saved data could not be read. To avoid overwriting it, changes in this session will not be saved."], error);
     return null;
   }
   if (!isValidState(parsed)) {
     storageWritable = false;
-    storageWarning("Tus datos guardados tienen un formato no compatible. Se han conservado intactos; los cambios de esta sesi\u00f3n no se guardar\u00e1n.");
+    storageWarning(["Tus datos guardados tienen un formato no compatible. Se han conservado intactos; los cambios de esta sesi\u00f3n no se guardar\u00e1n.",
+      "Your saved data has an unsupported format. It has been kept intact; changes in this session will not be saved."]);
     return null;
   }
   return migrateStoredState(parsed);
@@ -200,7 +235,8 @@ function loadState() {
   try {
     raw = localStorage.getItem(STORAGE_KEY);
   } catch (error) {
-    storageWarning("Este navegador no permite leer el almacenamiento local. Tus cambios podr\u00edan perderse al cerrar la p\u00e1gina.", error);
+    storageWarning(["Este navegador no permite leer el almacenamiento local. Tus cambios podr\u00edan perderse al cerrar la p\u00e1gina.",
+      "This browser does not allow access to local storage. Your changes may be lost when you close the page."], error);
     return freshState();
   }
   return raw === null ? freshState() : (decodeState(raw) ?? freshState());
@@ -214,7 +250,8 @@ function persistState() {
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
   } catch (error) {
-    storageWarning("No se pudieron guardar los cambios en este navegador. Por ahora solo est\u00e1n en esta pesta\u00f1a. Revisa el espacio o los permisos de almacenamiento.", error);
+    storageWarning(["No se pudieron guardar los cambios en este navegador. Por ahora solo est\u00e1n en esta pesta\u00f1a. Revisa el espacio o los permisos de almacenamiento.",
+      "Changes could not be saved in this browser. For now they are only in this tab. Check storage space or permissions."], error);
     return false;
   }
   $("storage-notice").hidden = true;
@@ -223,7 +260,8 @@ function persistState() {
 
 function notify(message) {
   clearTimeout(toastTimer);
-  $("toast").textContent = message;
+  toastMessages = message;
+  $("toast").textContent = localizedText(message);
   $("toast").hidden = false;
   toastTimer = setTimeout(() => { $("toast").hidden = true; }, 4800);
 }
@@ -233,7 +271,10 @@ function movieById(id) {
 }
 
 function foodById(id) {
-  return FOODS.find((food) => food.id === id);
+  const food = FOODS.find((food) => food.id === id);
+  if (!food) return food;
+  const [name, description] = ENGLISH_FOODS[id];
+  return { ...food, name: t(food.name, name), description: t(food.description, description) };
 }
 
 function candidates() {
@@ -256,7 +297,10 @@ function catalogLanguage() {
 
 // Alternate metadata is a local presentation, never a write to another member's movie.
 function moviePresentation(movie) {
-  if (!party.session || !movie?.tmdbId || (movie.language ?? "es-ES") === catalogLanguage()) return movie;
+  if (movie?.custom && !movie.tmdbId && CUSTOM_MOVIE_DESCRIPTIONS.includes(movie.description)) {
+    return { ...movie, description: t(...CUSTOM_MOVIE_DESCRIPTIONS) };
+  }
+  if (!movie?.tmdbId || (movie.language ?? "es-ES") === catalogLanguage()) return movie;
   const localized = localizedMovies.get(`${movie.tmdbId}:${catalogLanguage()}`);
   if (!localized) return movie;
   const { title, description, posterPath, genres, language } = localized;
@@ -266,70 +310,134 @@ function moviePresentation(movie) {
 function syncCatalogLanguage() {
   $("catalog-language").value = catalogLanguage();
   if (catalog.language === catalogLanguage()) return;
-  cancelSelection();
+  cancelSelection({ preserveMessage: true });
   catalogController?.abort();
   catalogController = null;
   Object.assign(catalog, { language: catalogLanguage(), page: 1, totalPages: 0,
-    results: [], loaded: false, loading: false, error: "" });
+    results: [], loaded: false, loading: false });
 }
 
-async function refreshSelectedLanguage() {
-  const movie = moviePresentation(movieById(state.draft.movieId));
-  if (!api.baseUrl || !movie?.tmdbId || (movie.language ?? "es-ES") === catalogLanguage()) return;
-  cancelSelection();
-  const controller = new AbortController();
-  selectionController = controller;
-  pickerMessage = "Actualizando el idioma de la ficha\u2026";
-  renderPicker();
-  try {
-    const details = await fetchMovieDetails(movie.tmdbId, controller.signal);
-    if (controller.signal.aborted) return;
-    localizedMovies.set(`${details.tmdbId}:${details.language}`, details);
-    if (!party.session) {
-      saveApiMovie(details);
-      persistState();
-    }
-  } catch (error) {
-    if (controller.signal.aborted) return;
-    pickerMessage = apiErrorMessage(error);
-    selectionRetry = refreshSelectedLanguage;
-  } finally {
-    if (selectionController === controller) {
-      selectionController = null;
-      if (!selectionRetry) pickerMessage = "";
-      renderPicker();
-      renderMovies();
-      renderPlans();
-    }
+function syncLocalizationContext() {
+  const context = `${party.epoch}:${party.session?.partyId ?? "personal"}:${catalogLanguage()}`;
+  if (context !== localizationContext) {
+    localizationController?.abort();
+    localizationController = null;
+    localizationPromise = null;
+    localizationFailures.clear();
+    localizationMessage = "";
+    localizationContext = context;
   }
+  return context;
+}
+
+function renderLanguageStatus() {
+  const status = $("language-status");
+  status.hidden = !localizationMessage;
+  status.textContent = localizedText(localizationMessage);
+  $("language-retry").hidden = !localizationFailures.size || Boolean(localizationController);
+}
+
+// The original hook also refreshes collections and plans. Only saved TMDB entries are fetched.
+async function refreshSelectedLanguage({ retry = false } = {}) {
+  const context = syncLocalizationContext();
+  if (localizationController) {
+    await localizationPromise;
+    if (context !== localizationContext) return;
+    return refreshSelectedLanguage({ retry });
+  }
+  if (retry) localizationFailures.clear();
+  const language = catalogLanguage();
+  const missing = state.movies.filter((movie) => movie.tmdbId
+    && (moviePresentation(movie).language ?? "es-ES") !== language);
+  const missingIds = new Set(missing.map((movie) => movie.tmdbId));
+  for (const id of localizationFailures.keys()) {
+    if (!missingIds.has(id)) localizationFailures.delete(id);
+  }
+  const pending = missing.filter((movie) => !localizationFailures.has(movie.tmdbId))
+    .sort((a, b) => Number(b.id === state.draft.movieId) - Number(a.id === state.draft.movieId));
+  const showFailures = () => {
+    if (localizationFailures.size) {
+      const error = localizationFailures.values().next().value;
+      localizationMessage = [
+        `No se pudieron actualizar todas las traducciones. Se conservan los datos disponibles. ${error.messages[0]}`,
+        `Not all translations could be updated. Available details have been kept. ${error.messages[1]}`,
+      ];
+    } else localizationMessage = "";
+    renderLanguageStatus();
+  };
+  if (!pending.length) { showFailures(); return; }
+  if (!api.baseUrl) {
+    const error = new MovieApiError(
+      "Conecta el proxy para traducir las pel\u00edculas guardadas.",
+      "Connect the proxy to translate saved movies.");
+    pending.forEach((movie) => localizationFailures.set(movie.tmdbId, error));
+    showFailures();
+    return;
+  }
+  const controller = new AbortController();
+  localizationController = controller;
+  localizationMessage = ["Actualizando t\u00edtulos y p\u00f3sters de tu colecci\u00f3n\u2026",
+    "Updating titles and posters in your collection\u2026"];
+  renderLanguageStatus();
+  const current = () => !controller.signal.aborted && context === syncLocalizationContext();
+  let index = 0;
+  const translateNext = async () => {
+    while (index < pending.length && current()) {
+      const movie = pending[index++];
+      try {
+        const details = await fetchMovieDetails(movie.tmdbId, controller.signal, language);
+        if (!current()) return;
+        if (movieById(movie.id)?.tmdbId === movie.tmdbId) {
+          localizedMovies.set(`${details.tmdbId}:${language}`, details);
+          preserveRenderedFocus(() => {
+            renderPicker();
+            renderMovies();
+            renderPlans();
+          });
+        }
+      } catch (error) {
+        if (!current()) return;
+        if (movieById(movie.id)?.tmdbId === movie.tmdbId) {
+          localizationFailures.set(movie.tmdbId, apiErrorMessage(error));
+        }
+      }
+    }
+  };
+  localizationPromise = Promise.all(Array.from({ length: Math.min(3, pending.length) }, translateNext));
+  await localizationPromise;
+  if (!current()) return;
+  localizationController = null;
+  localizationPromise = null;
+  showFailures();
 }
 
 function changeCatalogLanguage(language) {
   if (!isCatalogLanguage(language)) {
     $("catalog-language").value = catalogLanguage();
-    notify("Elige un idioma de cat\u00e1logo v\u00e1lido.");
+    notify(["Elige un idioma v\u00e1lido para la app.", "Choose a valid app language."]);
     return;
   }
   if (sharedBusy()) {
     $("catalog-language").value = catalogLanguage();
-    notify("Espera a que termine la operaci\u00f3n de la party.");
+    notify(["Espera a que termine la operaci\u00f3n de la party.", "Wait for the party operation to finish."]);
     return;
   }
   if (language === catalogLanguage()) return;
   state.preferences.language = language;
   persistState();
-  renderAll();
+  renderAll({ preserveFormValues: true });
   return refreshSelectedLanguage();
 }
 
-class MovieApiError extends Error {}
+class MovieApiError extends LocalizedError {}
 
-async function apiRequest(path, params, signal) {
+async function apiRequest(path, params, signal, language = catalogLanguage()) {
   signal?.throwIfAborted();
-  if (!api.baseUrl) throw new MovieApiError("Configura la URL del proxy para conectar el cat\u00e1logo TMDB.");
+  if (!api.baseUrl) throw new MovieApiError("Configura la URL del proxy para conectar el cat\u00e1logo TMDB.",
+    "Configure the proxy URL to connect to the TMDB catalog.");
   const url = new URL(`${api.baseUrl}${path}`);
   Object.entries(params).forEach(([key, value]) => url.searchParams.set(key, String(value)));
-  url.searchParams.set("language", catalogLanguage());
+  url.searchParams.set("language", language);
   let response;
   try {
     response = await fetch(url, {
@@ -340,8 +448,9 @@ async function apiRequest(path, params, signal) {
     });
   } catch (error) {
     if (signal?.aborted) throw error;
-    if (error.name === "TimeoutError") throw new MovieApiError("TMDB est\u00e1 tardando demasiado. Vuelve a intentarlo.");
-    if (error instanceof TypeError) throw new MovieApiError("No se pudo conectar con el cat\u00e1logo. Revisa la conexi\u00f3n y la configuraci\u00f3n del proxy.");
+    if (error.name === "TimeoutError") throw new MovieApiError("TMDB est\u00e1 tardando demasiado. Vuelve a intentarlo.", "TMDB is taking too long. Try again.");
+    if (error instanceof TypeError) throw new MovieApiError("No se pudo conectar con el cat\u00e1logo. Revisa la conexi\u00f3n y la configuraci\u00f3n del proxy.",
+      "Could not connect to the catalog. Check your connection and proxy configuration.");
     throw error;
   }
   let data;
@@ -349,44 +458,47 @@ async function apiRequest(path, params, signal) {
     data = await response.json();
   } catch (error) {
     if (signal?.aborted) throw error;
-    if (["TimeoutError", "AbortError"].includes(error.name)) throw new MovieApiError("TMDB est\u00e1 tardando demasiado. Vuelve a intentarlo.");
-    if (error instanceof TypeError) throw new MovieApiError("Se interrumpi\u00f3 la descarga de la ficha. Vuelve a intentarlo.");
+    if (["TimeoutError", "AbortError"].includes(error.name)) throw new MovieApiError("TMDB est\u00e1 tardando demasiado. Vuelve a intentarlo.", "TMDB is taking too long. Try again.");
+    if (error instanceof TypeError) throw new MovieApiError("Se interrumpi\u00f3 la descarga de la ficha. Vuelve a intentarlo.", "The movie download was interrupted. Try again.");
     if (!(error instanceof SyntaxError)) throw error;
-    throw new MovieApiError("El proxy no devolvi\u00f3 datos v\u00e1lidos. Revisa su URL y vuelve a intentarlo.");
+    throw new MovieApiError("El proxy no devolvi\u00f3 datos v\u00e1lidos. Revisa su URL y vuelve a intentarlo.", "The proxy returned invalid data. Check its URL and try again.");
   }
   if (!response.ok) {
-    throw new MovieApiError(isRecord(data) && isText(data.error, 500)
-      ? data.error : `No se pudo consultar TMDB (HTTP ${response.status}). Int\u00e9ntalo de nuevo.`);
+    if (isRecord(data) && isText(data.error, 500)) throw new MovieApiError(data.error);
+    throw new MovieApiError(`No se pudo consultar TMDB (HTTP ${response.status}). Int\u00e9ntalo de nuevo.`,
+      `Could not query TMDB (HTTP ${response.status}). Try again.`);
   }
   return data;
 }
 
-async function fetchCatalogPage(query, genre, page, signal) {
-  const language = catalogLanguage();
-  const data = await apiRequest("/movies", { query, genre, page }, signal);
+async function fetchCatalogPage(query, genre, page, signal, language = catalogLanguage()) {
+  const data = await apiRequest("/movies", { query, genre, page }, signal, language);
   if (!isRecord(data) || data.page !== page || !Number.isInteger(data.totalPages)
     || data.totalPages < 0 || data.totalPages > 500 || !Number.isInteger(data.totalResults) || data.totalResults < 0
     || !Array.isArray(data.results) || data.results.length > 20
     || !data.results.every((movie) => isTmdbData(movie) && movie.id === `tmdb-${movie.tmdbId}`
-      && (movie.language === undefined || movie.language === language))) {
-    throw new MovieApiError("El cat\u00e1logo devolvi\u00f3 un formato no compatible.");
+      && (movie.language ?? "es-ES") === language)) {
+    throw new MovieApiError("El cat\u00e1logo devolvi\u00f3 un formato no compatible.", "The catalog returned an incompatible format.");
   }
   return { ...data, results: data.results.map(normalizeMovieGenre) };
 }
 
-async function fetchMovieDetails(tmdbId, signal) {
-  const language = catalogLanguage();
-  const data = await apiRequest(`/movies/${tmdbId}`, {}, signal);
+async function fetchMovieDetails(tmdbId, signal, language = catalogLanguage()) {
+  const data = await apiRequest(`/movies/${tmdbId}`, {}, signal, language);
   if (!isRecord(data) || !isTmdbData(data.movie) || data.movie.tmdbId !== tmdbId
     || (data.movie.language !== undefined && data.movie.language !== language)
-    || data.movie.id !== `tmdb-${tmdbId}`) throw new MovieApiError("No se pudo leer la ficha de esta pel\u00edcula.");
+    || data.movie.id !== `tmdb-${tmdbId}`) throw new MovieApiError("No se pudo leer la ficha de esta pel\u00edcula.", "Could not read this movie's details.");
+  if (data.movie.language === undefined && language !== "es-ES") {
+    throw new MovieApiError("El proxy no confirm\u00f3 el idioma de la ficha. Actual\u00edzalo para habilitar las traducciones.",
+      "The proxy did not confirm the movie language. Update it to enable translations.");
+  }
   return { ...normalizeMovieGenre(data.movie), language };
 }
 
 function apiErrorMessage(error) {
-  if (error instanceof MovieApiError || error instanceof PartyApiError) return error.message;
+  if (error instanceof LocalizedError) return error;
   console.error("Movie Night: catalog", error);
-  return "No se pudo cargar la pel\u00edcula. Int\u00e9ntalo de nuevo.";
+  return new MovieApiError("No se pudo cargar la pel\u00edcula. Int\u00e9ntalo de nuevo.", "Could not load the movie. Try again.");
 }
 
 async function loadCatalog(page = 1) {
@@ -414,20 +526,27 @@ function renderCatalog() {
   const configured = Boolean(api.baseUrl);
   $("catalog-search").disabled = !configured;
   $("catalog-list").setAttribute("aria-busy", String(catalog.loading));
-  $("catalog-status").textContent = !configured ? (api.error || "Conecta el proxy TMDB para explorar pel\u00edculas. Consulta el aviso de configuraci\u00f3n.")
-    : catalog.loading ? "Buscando pel\u00edculas en TMDB\u2026"
-    : catalog.error || (catalog.results.length ? `${catalog.totalResults.toLocaleString("es")} resultados en TMDB.`
-      : catalog.loaded ? "No encontramos pel\u00edculas. Prueba otro t\u00edtulo o g\u00e9nero." : "Busca un t\u00edtulo o descubre pel\u00edculas populares.");
+  $("catalog-status").textContent = !configured ? (api.error ? localizedText(api.error)
+    : t("Conecta el proxy TMDB para explorar pel\u00edculas. Consulta el aviso de configuraci\u00f3n.",
+      "Connect the TMDB proxy to explore movies. See the setup notice."))
+    : catalog.loading ? t("Buscando pel\u00edculas en TMDB\u2026", "Searching TMDB for movies\u2026")
+    : catalog.error ? localizedText(catalog.error)
+    : catalog.results.length ? t(`${catalog.totalResults.toLocaleString(activeLanguage)} resultados en TMDB.`,
+      `${catalog.totalResults.toLocaleString(activeLanguage)} results on TMDB.`)
+    : catalog.loaded ? t("No encontramos pel\u00edculas. Prueba otro t\u00edtulo o g\u00e9nero.", "No movies found. Try another title or genre.")
+      : t("Busca un t\u00edtulo o descubre pel\u00edculas populares.", "Search for a title or discover popular movies.");
   $("catalog-retry").hidden = !catalog.error || catalog.loading || !configured;
   const fragment = document.createDocumentFragment();
   catalog.results.forEach((movie) => {
     const row = $("catalog-row-template").content.firstElementChild.cloneNode(true);
+    translateInterface(row);
     row.querySelector(".catalog-title").textContent = movie.title;
     row.querySelector(".catalog-title").lang = movie.language ?? catalogLanguage();
-    row.querySelector(".catalog-meta").textContent = [movie.year ?? "A\u00f1o no disponible", MOVIE_GENRES[movie.genre]].join(" \u00b7 ");
+    row.querySelector(".catalog-meta").textContent = [movie.year ?? t("A\u00f1o no disponible", "Year unavailable"), genreName(movie.genre)].join(" \u00b7 ");
     row.querySelector(".catalog-description").textContent = movie.description;
     row.querySelector(".catalog-description").lang = movie.language ?? catalogLanguage();
     const poster = row.querySelector(".catalog-poster");
+    poster.alt = t(`P\u00f3ster de ${movie.title}`, `Poster for ${movie.title}`);
     if (movie.posterPath) {
       poster.src = `https://image.tmdb.org/t/p/w185${movie.posterPath}`;
       poster.hidden = false;
@@ -436,15 +555,17 @@ function renderCatalog() {
     const choose = row.querySelector(".choose-catalog-movie");
     const existing = savedApiMovie(movie);
     choose.dataset.tmdbId = movie.tmdbId;
-    choose.textContent = existing ? "Elegir de mi colecci\u00f3n" : "Elegir y guardar";
-    choose.setAttribute("aria-label", `Elegir ${movie.title}${movie.year ? ` (${movie.year})` : ""} para mi plan`);
+    choose.textContent = existing ? t("Elegir de mi colecci\u00f3n", "Choose from my collection") : t("Elegir y guardar", "Choose and save");
+    const title = `${movie.title}${movie.year ? ` (${movie.year})` : ""}`;
+    choose.setAttribute("aria-label", t(`Elegir ${title} para mi plan`, `Choose ${title} for my plan`));
     fragment.append(row);
   });
   $("catalog-list").replaceChildren(fragment);
   $("catalog-pagination").hidden = catalog.loading || Boolean(catalog.error) || catalog.totalPages < 2;
   $("catalog-previous").disabled = catalog.page <= 1 || catalog.loading;
   $("catalog-next").disabled = catalog.page >= catalog.totalPages || catalog.loading;
-  $("catalog-page").textContent = `P\u00e1gina ${catalog.page} de ${catalog.totalPages}`;
+  $("catalog-page").textContent = t(`P\u00e1gina ${catalog.page.toLocaleString(activeLanguage)} de ${catalog.totalPages.toLocaleString(activeLanguage)}`,
+    `Page ${catalog.page.toLocaleString(activeLanguage)} of ${catalog.totalPages.toLocaleString(activeLanguage)}`);
 }
 
 // Match legacy entries only when title AND release year agree; IDs keep existing plans intact.
@@ -466,22 +587,25 @@ function saveApiMovie(movie, genre) {
   return saved;
 }
 
-function cancelSelection() {
+function cancelSelection({ preserveMessage = false } = {}) {
+  const wasLoading = Boolean(selectionController);
   selectionController?.abort();
   selectionController = null;
-  selectionRetry = null;
-  pickerMessage = "";
+  if (!preserveMessage || wasLoading) {
+    selectionRetry = null;
+    pickerMessage = "";
+  }
 }
 
 async function selectFromApi(loadMovie, retry, { genre = null, forceFood = false, focus = false } = {}) {
   if (sharedBusy()) {
-    notify("Espera a que termine la operaci\u00f3n de la party.");
+    notify(["Espera a que termine la operaci\u00f3n de la party.", "Wait for the party operation to finish."]);
     return;
   }
   cancelSelection();
   const controller = new AbortController();
   selectionController = controller;
-  pickerMessage = "Cargando la ficha de la pel\u00edcula\u2026";
+  pickerMessage = ["Cargando la ficha de la pel\u00edcula\u2026", "Loading movie details\u2026"];
   renderPicker();
   if (focus) $("planner").scrollIntoView({ block: "start" });
   let movie;
@@ -496,13 +620,15 @@ async function selectFromApi(loadMovie, retry, { genre = null, forceFood = false
       if (controller.signal.aborted) return;
       if (!snapshot) {
         selectionController = null;
-        pickerMessage = "No se pudo confirmar que la pel\u00edcula se guard\u00f3 en la party. Actualiza la lista antes de reintentar.";
+        pickerMessage = ["No se pudo confirmar que la pel\u00edcula se guard\u00f3 en la party. Actualiza la lista antes de reintentar.",
+          "Could not confirm that the movie was saved to the party. Refresh the list before retrying."];
         selectionRetry = retry;
         renderPicker();
         return;
       }
       savedMovie = state.movies.find((saved) => saved.tmdbId === movie.tmdbId);
-      if (!savedMovie) throw new PartyApiError("La pel\u00edcula no apareci\u00f3 en la lista compartida. Actualiza la party.");
+      if (!savedMovie) throw new PartyApiError("La pel\u00edcula no apareci\u00f3 en la lista compartida. Actualiza la party.",
+        "The movie did not appear in the shared list. Refresh the party.");
     } else savedMovie = saveApiMovie(movie, genre);
   } catch (error) {
     if (controller.signal.aborted) return;
@@ -526,12 +652,14 @@ async function selectFromApi(loadMovie, retry, { genre = null, forceFood = false
     $("planner").scrollIntoView({ block: "start" });
     $("movie-title").focus({ preventScroll: true });
   }
-  notify(saved || party.session ? `${savedMovie.title}: lista para tu pr\u00f3ximo plan.` : "Pel\u00edcula elegida solo para esta sesi\u00f3n.");
+  const title = moviePresentation(savedMovie).title;
+  notify(saved || party.session ? [`${title}: lista para tu pr\u00f3ximo plan.`, `${title}: ready for your next plan.`]
+    : ["Pel\u00edcula elegida solo para esta sesi\u00f3n.", "Movie selected for this session only."]);
 }
 
 function chooseCatalogMovie(movie) {
   if (sharedBusy()) {
-    notify("Espera a que termine la operaci\u00f3n de la party.");
+    notify(["Espera a que termine la operaci\u00f3n de la party.", "Wait for the party operation to finish."]);
     return;
   }
   const existing = savedApiMovie(movie);
@@ -563,7 +691,8 @@ async function randomApiMovie(signal) {
     const movie = pickRandom(options, null);
     if (movie) return fetchMovieDetails(movie.tmdbId, signal);
   }
-  throw new MovieApiError("No encontramos otra pel\u00edcula en las p\u00e1ginas consultadas. Reintenta, cambia de g\u00e9nero o desactiva Solo pendientes.");
+  throw new MovieApiError("No encontramos otra pel\u00edcula en las p\u00e1ginas consultadas. Reintenta, cambia de g\u00e9nero o desactiva Solo pendientes.",
+    "No other movie was found on the pages checked. Retry, change genre, or turn off Pending only.");
 }
 
 // Avoid immediate repeats when at least two choices exist; a single choice remains valid.
@@ -581,7 +710,8 @@ function randomMovie(forceFood = false) {
   cancelSelection();
   const movie = pickRandom(candidates(), state.draft.movieId);
   if (!movie) {
-    notify("No hay pel\u00edculas con estos filtros. Cambia de g\u00e9nero, incluye las vistas o a\u00f1ade una nueva.");
+    notify(["No hay pel\u00edculas con estos filtros. Cambia de g\u00e9nero, incluye las vistas o a\u00f1ade una nueva.",
+      "No movies match these filters. Change genre, include watched movies, or add a new one."]);
     return null;
   }
   state.draft.movieId = movie.id;
@@ -603,13 +733,13 @@ function randomFood() {
 
 function selectMovie(id) {
   if (party.loading || party.entering) {
-    notify("Espera a que termine de cargar la party.");
+    notify(["Espera a que termine de cargar la party.", "Wait for the party to finish loading."]);
     return;
   }
   cancelSelection();
   const movie = movieById(id);
   if (!movie) {
-    notify("No se encontr\u00f3 esa pel\u00edcula. Vuelve a elegir una de tu colecci\u00f3n.");
+    notify(["No se encontr\u00f3 esa pel\u00edcula. Vuelve a elegir una de tu colecci\u00f3n.", "That movie was not found. Choose another from your collection."]);
     return;
   }
   state.draft.movieId = id;
@@ -618,7 +748,8 @@ function selectMovie(id) {
   renderPicker();
   $("planner").scrollIntoView({ block: "start" });
   $("movie-title").focus({ preventScroll: true });
-  notify(`${movie.title}: lista para tu pr\u00f3ximo plan.`);
+  const title = moviePresentation(movie).title;
+  notify([`${title}: lista para tu pr\u00f3ximo plan.`, `${title}: ready for your next plan.`]);
 }
 
 function renderCast(movie) {
@@ -630,6 +761,7 @@ function renderCast(movie) {
   const fragment = document.createDocumentFragment();
   cast.forEach((name) => {
     const row = $("cast-member-template").content.firstElementChild.cloneNode(true);
+    translateInterface(row);
     row.querySelector(".cast-name").textContent = name;
     const profilePath = movie.castProfiles?.find((person) => person.name === name)?.profilePath;
     const photo = row.querySelector(".cast-photo");
@@ -658,28 +790,31 @@ function renderPicker() {
   const online = movieSource() === "catalog";
   const busy = Boolean(selectionController) || sharedBusy();
   $("catalog-language").disabled = sharedBusy();
-  $("movie-badge").textContent = movie ? MOVIE_GENRES[movie.genre].toLocaleUpperCase("es") : "POR DESCUBRIR";
-  $("movie-title").textContent = movie ? movie.title : "Tu pr\u00f3xima favorita te espera.";
-  $("movie-title").lang = movie?.language ?? "es";
+  $("movie-badge").textContent = movie ? genreName(movie.genre).toLocaleUpperCase(activeLanguage) : t("POR DESCUBRIR", "YET TO DISCOVER");
+  $("movie-title").textContent = movie ? movie.title : t("Tu pr\u00f3xima favorita te espera.", "Your next favorite is waiting.");
+  $("movie-title").lang = movie?.tmdbId ? (movie.language ?? "es-ES") : activeLanguage;
   $("movie-meta").textContent = movie
-    ? [movie.year ?? "A\u00f1o no disponible", movie.minutes ? `${movie.minutes} min` : "Duraci\u00f3n no disponible",
-      movie.addedByName ? `A\u00f1adida por ${movie.addedByName}` : movie.custom ? "A\u00f1adida por ti" : null,
-      movie.watched ? "Ya vista" : null].filter(Boolean).join(" \u00b7 ")
-    : online ? "Un cat\u00e1logo entero por descubrir." : `${state.movies.length} pel\u00edculas en tu colecci\u00f3n.`;
-  $("movie-description").textContent = movie ? movie.description : "Pulsa el bot\u00f3n y descubre qu\u00e9 ver esta noche.";
-  $("movie-description").lang = movie?.language ?? "es";
+    ? [movie.year ?? t("A\u00f1o no disponible", "Year unavailable"),
+      movie.minutes ? `${movie.minutes.toLocaleString(activeLanguage)} min` : t("Duraci\u00f3n no disponible", "Runtime unavailable"),
+      movie.addedByName ? t(`A\u00f1adida por ${movie.addedByName}`, `Added by ${movie.addedByName}`) : movie.custom ? t("A\u00f1adida por ti", "Added by you") : null,
+      movie.watched ? t("Ya vista", "Watched") : null].filter(Boolean).join(" \u00b7 ")
+    : online ? t("Un cat\u00e1logo entero por descubrir.", "An entire catalog to discover.")
+      : t(`${state.movies.length.toLocaleString(activeLanguage)} pel\u00edculas en tu colecci\u00f3n.`,
+        `${state.movies.length.toLocaleString(activeLanguage)} movies in your collection.`);
+  $("movie-description").textContent = movie ? movie.description : t("Pulsa el bot\u00f3n y descubre qu\u00e9 ver esta noche.", "Press the button and discover what to watch tonight.");
+  $("movie-description").lang = movie?.tmdbId ? (movie.language ?? "es-ES") : activeLanguage;
   const details = movie?.tmdbId ? movie : null;
   $("movie-score").hidden = !details;
-  $("movie-score-value").textContent = details && details.rating !== null ? `${Math.round(details.rating * 10)}%` : "\u2014";
-  $("movie-score-votes").textContent = !details || details.rating === null ? "Sin puntuaci\u00f3n en TMDB"
-    : details.voteCount == null ? "TMDB \u00b7 Votos no disponibles"
-    : `TMDB \u00b7 ${details.voteCount.toLocaleString("es")} ${details.voteCount === 1 ? "voto" : "votos"}`;
+  $("movie-score-value").textContent = details && details.rating !== null ? `${Math.round(details.rating * 10).toLocaleString(activeLanguage)}%` : "\u2014";
+  $("movie-score-votes").textContent = !details || details.rating === null ? t("Sin puntuaci\u00f3n en TMDB", "No TMDB rating")
+    : details.voteCount == null ? t("TMDB \u00b7 Votos no disponibles", "TMDB \u00b7 Votes unavailable")
+    : `TMDB \u00b7 ${details.voteCount.toLocaleString(activeLanguage)} ${details.voteCount === 1 ? t("voto", "vote") : t("votos", "votes")}`;
   $("movie-credits").hidden = !details;
   renderCast(details);
-  $("movie-directors").textContent = details?.directors.join(", ") || "Direcci\u00f3n no disponible";
-  $("movie-genres").textContent = details?.genres.join(", ") || "G\u00e9neros no disponibles";
-  $("movie-genres").lang = details?.genres.length ? (details.language ?? "es") : "es";
-  $("movie-original-title").textContent = details?.originalTitle || "No disponible";
+  $("movie-directors").textContent = details?.directors.join(", ") || t("Direcci\u00f3n no disponible", "Director unavailable");
+  $("movie-genres").textContent = details?.genres.join(", ") || t("G\u00e9neros no disponibles", "Genres unavailable");
+  $("movie-genres").lang = details?.genres.length ? (details.language ?? "es-ES") : activeLanguage;
+  $("movie-original-title").textContent = details?.originalTitle || t("No disponible", "Unavailable");
   $("movie-tmdb-link").hidden = !movie?.tmdbId;
   if (movie?.tmdbId) $("movie-tmdb-link").href = `https://www.themoviedb.org/movie/${movie.tmdbId}`;
   const poster = $("movie-poster");
@@ -692,28 +827,30 @@ function renderPicker() {
       poster.dataset.path = posterPath;
       poster.src = `https://image.tmdb.org/t/p/w500${posterPath}`;
     }
-    poster.alt = `P\u00f3ster de ${movie.title}`;
+    poster.alt = t(`P\u00f3ster de ${movie.title}`, `Poster for ${movie.title}`);
   } else {
     poster.removeAttribute("src");
     delete poster.dataset.path;
   }
   $("candidate-count").textContent = online
-    ? "Sorpresas del cat\u00e1logo TMDB, no solo de tu colecci\u00f3n."
+    ? t("Sorpresas del cat\u00e1logo TMDB, no solo de tu colecci\u00f3n.", "Surprises from the TMDB catalog, not just your collection.")
     : count
-    ? `${count} ${count === 1 ? "pel\u00edcula" : "pel\u00edculas"} en el bombo`
-    : "Sin opciones. Abre Preferencias o a\u00f1ade una peli en Mi colecci\u00f3n.";
+    ? t(`${count.toLocaleString(activeLanguage)} ${count === 1 ? "pel\u00edcula" : "pel\u00edculas"} en el bombo`,
+      `${count.toLocaleString(activeLanguage)} ${count === 1 ? "movie" : "movies"} in the draw`)
+    : t("Sin opciones. Abre Preferencias o a\u00f1ade una peli en Mi colecci\u00f3n.", "No options. Open Preferences or add a movie in My collection.");
   $("random-movie").disabled = busy || (online ? !api.baseUrl : count === 0);
   $("random-movie").setAttribute("aria-busy", String(busy));
   $("random-movie-icon").hidden = busy;
   $("random-movie-spinner").hidden = !busy;
   $("picker-status").className = busy ? "sr-only" : "helper";
   $("picker-status").hidden = !pickerMessage;
-  $("picker-status").textContent = pickerMessage;
+  $("picker-status").textContent = localizedText(pickerMessage);
   $("retry-movie").hidden = !selectionRetry || busy;
-  $("food-name").textContent = food ? food.name : "Comida por elegir";
-  $("food-description").textContent = food ? food.description : "Porque una buena peli merece un buen bocado.";
+  $("food-name").textContent = food ? food.name : t("Comida por elegir", "Food to choose");
+  $("food-description").textContent = food ? food.description : t("Porque una buena peli merece un buen bocado.", "Because a good movie deserves a good bite.");
   $("save-plan").disabled = busy || !movie || !food;
-  $("plan-hint").textContent = movie && food ? "Pon fecha y lugar. Lo dem\u00e1s ya est\u00e1." : "Elige una peli y una comida para empezar.";
+  $("plan-hint").textContent = movie && food ? t("Pon fecha y lugar. Lo dem\u00e1s ya est\u00e1.", "Set a date and place. Everything else is ready.")
+    : t("Elige una peli y una comida para empezar.", "Choose a movie and food to get started.");
 }
 
 function normalizedTitle(title) {
@@ -723,27 +860,27 @@ function normalizedTitle(title) {
 async function addMovie(event) {
   event?.preventDefault();
   if (sharedBusy()) {
-    notify("Espera a que termine la operaci\u00f3n de la party.");
+    notify(["Espera a que termine la operaci\u00f3n de la party.", "Wait for the party operation to finish."]);
     return;
   }
   const input = $("new-movie-title");
-  input.setCustomValidity("");
+  setValidationMessage(input);
   const title = input.value.trim().replace(/\s+/g, " ");
-  if (!title) input.setCustomValidity("Escribe el t\u00edtulo de una pel\u00edcula.");
+  if (!title) setValidationMessage(input, "Escribe el t\u00edtulo de una pel\u00edcula.", "Enter a movie title.");
   if (!$("add-movie-form").reportValidity()) return;
   const genre = $("new-movie-genre").value;
   if (!isGenre(genre)) {
-    notify("Elige un g\u00e9nero v\u00e1lido para tu pel\u00edcula.");
+    notify(["Elige un g\u00e9nero v\u00e1lido para tu pel\u00edcula.", "Choose a valid genre for your movie."]);
     return;
   }
   if (state.movies.some((movie) => normalizedTitle(movie.title) === normalizedTitle(title))) {
-    input.setCustomValidity("Esta pel\u00edcula ya est\u00e1 en tu colecci\u00f3n.");
+    setValidationMessage(input, "Esta pel\u00edcula ya est\u00e1 en tu colecci\u00f3n.", "This movie is already in your collection.");
     input.reportValidity();
     return;
   }
   const movie = {
     id: crypto.randomUUID(), title, genre, year: null, minutes: null,
-    description: "Una de tus elegidas. El mejor motivo para reservar una noche de pel\u00edcula.",
+    description: CUSTOM_MOVIE_DESCRIPTIONS[0],
     watched: false, custom: true,
   };
   if (party.session) {
@@ -755,14 +892,15 @@ async function addMovie(event) {
   closeAddMovie();
   renderMovies();
   renderPicker();
-  notify(saved || party.session ? `"${title}" ya est\u00e1 en pendientes.` : "Pel\u00edcula a\u00f1adida solo para esta sesi\u00f3n.");
+  notify(saved || party.session ? [`"${title}" ya est\u00e1 en pendientes.`, `"${title}" is now pending.`]
+    : ["Pel\u00edcula a\u00f1adida solo para esta sesi\u00f3n.", "Movie added for this session only."]);
 }
 
 async function toggleWatched(id) {
-  if (sharedBusy()) { notify("Espera a que termine la operaci\u00f3n de la party."); return; }
+  if (sharedBusy()) { notify(["Espera a que termine la operaci\u00f3n de la party.", "Wait for the party operation to finish."]); return; }
   const movie = movieById(id);
   if (!movie) {
-    notify("No se encontr\u00f3 la pel\u00edcula que quieres actualizar.");
+    notify(["No se encontr\u00f3 la pel\u00edcula que quieres actualizar.", "The movie you want to update was not found."]);
     return;
   }
   const activeIndex = [...$("movie-list").children].findIndex((row) => row.contains(document.activeElement));
@@ -774,34 +912,40 @@ async function toggleWatched(id) {
   renderMovies();
   renderPicker();
   if (activeIndex >= 0) focusAfterRemoval("movie-list", ".watch-toggle", activeIndex, `[data-movie-tab="${state.preferences.movieTab}"]`);
-  notify(watched ? `"${movie.title}" pasa a ya vistas.` : `"${movie.title}" vuelve a pendientes.`);
+  const title = moviePresentation(movie).title;
+  notify(watched ? [`"${title}" pasa a ya vistas.`, `"${title}" moves to watched.`]
+    : [`"${title}" vuelve a pendientes.`, `"${title}" moves back to pending.`]);
 }
 
 async function deleteMovie(id) {
-  if (sharedBusy()) { notify("Espera a que termine la operaci\u00f3n de la party."); return; }
+  if (sharedBusy()) { notify(["Espera a que termine la operaci\u00f3n de la party.", "Wait for the party operation to finish."]); return; }
   const movie = movieById(id);
   if (!movie) {
-    notify("No se encontr\u00f3 la pel\u00edcula que quieres eliminar.");
+    notify(["No se encontr\u00f3 la pel\u00edcula que quieres eliminar.", "The movie you want to delete was not found."]);
     return;
   }
   if (!canDeletePartyEntry(movie.addedBy)) {
-    notify("Solo quien a\u00f1adi\u00f3 la pel\u00edcula o el anfitri\u00f3n puede eliminarla de la colecci\u00f3n del grupo.");
+    notify(["Solo quien a\u00f1adi\u00f3 la pel\u00edcula o el anfitri\u00f3n puede eliminarla de la colecci\u00f3n del grupo.",
+      "Only the person who added the movie or the host can delete it from the group's collection."]);
     return;
   }
-  if (!window.confirm(`\u00bfEliminar "${movie.title}" de la colecci\u00f3n del grupo? Tambi\u00e9n se eliminar\u00e1n todas sus noches programadas y completadas, incluidas las creadas por otros miembros. Este cambio afecta a todo el grupo y no se puede deshacer.`)) return;
+  const title = moviePresentation(movie).title;
+  if (!window.confirm(t(`\u00bfEliminar "${title}" de la colecci\u00f3n del grupo? Tambi\u00e9n se eliminar\u00e1n todas sus noches programadas y completadas, incluidas las creadas por otros miembros. Este cambio afecta a todo el grupo y no se puede deshacer.`,
+    `Delete "${title}" from the group's collection? All its scheduled and completed nights will also be deleted, including those created by other members. This change affects the whole group and cannot be undone.`))) return;
   const index = [...$("movie-list").children].findIndex((row) => row.contains(document.activeElement));
   cancelSelection();
   if (!await writeParty(`/movies/${encodeURIComponent(id)}`, "DELETE")) return;
   persistState();
   focusAfterRemoval("movie-list", ".delete-movie", Math.max(0, index), `[data-movie-tab="${state.preferences.movieTab}"]`);
-  notify(`"${movie.title}" y sus noches asociadas se eliminaron de la colecci\u00f3n del grupo.`);
+  notify([`"${title}" y sus noches asociadas se eliminaron de la colecci\u00f3n del grupo.`,
+    `"${title}" and its associated nights were deleted from the group's collection.`]);
 }
 
 function renderMovies() {
   const watched = state.movies.filter((movie) => movie.watched).length;
-  $("collection-total").textContent = state.movies.length;
-  $("pending-count").textContent = state.movies.length - watched;
-  $("watched-count").textContent = watched;
+  $("collection-total").textContent = state.movies.length.toLocaleString(activeLanguage);
+  $("pending-count").textContent = (state.movies.length - watched).toLocaleString(activeLanguage);
+  $("watched-count").textContent = watched.toLocaleString(activeLanguage);
   const showWatched = state.preferences.movieTab === "watched";
   document.querySelectorAll("[data-movie-tab]").forEach((button) => {
     button.setAttribute("aria-pressed", String(button.dataset.movieTab === state.preferences.movieTab));
@@ -812,58 +956,62 @@ function renderMovies() {
   const fragment = document.createDocumentFragment();
   movies.forEach((movie) => {
     const row = $("movie-row-template").content.firstElementChild.cloneNode(true);
+    translateInterface(row);
     row.querySelector(".movie-row-title").textContent = movie.title;
-    row.querySelector(".movie-row-title").lang = movie.language ?? "es";
-    row.querySelector(".movie-row-meta").textContent = [MOVIE_GENRES[movie.genre], movie.year,
-      movie.minutes ? `${movie.minutes} min` : null, movie.tmdbId ? "TMDB" : null,
-      movie.addedByName ? `A\u00f1adida por ${movie.addedByName}` : movie.custom ? "A\u00f1adida por ti" : null].filter(Boolean).join(" \u00b7 ");
+    row.querySelector(".movie-row-title").lang = movie.tmdbId ? (movie.language ?? "es-ES") : activeLanguage;
+    row.querySelector(".movie-row-meta").textContent = [genreName(movie.genre), movie.year,
+      movie.minutes ? `${movie.minutes.toLocaleString(activeLanguage)} min` : null, movie.tmdbId ? "TMDB" : null,
+      movie.addedByName ? t(`A\u00f1adida por ${movie.addedByName}`, `Added by ${movie.addedByName}`)
+        : movie.custom ? t("A\u00f1adida por ti", "Added by you") : null].filter(Boolean).join(" \u00b7 ");
     const watch = row.querySelector(".watch-toggle");
     watch.dataset.id = movie.id;
     watch.setAttribute("aria-pressed", String(movie.watched));
-    watch.setAttribute("aria-label", `Marcar ${movie.title} como ${movie.watched ? "pendiente" : "vista"}`);
+    watch.setAttribute("aria-label", t(`Marcar ${movie.title} como ${movie.watched ? "pendiente" : "vista"}`,
+      `Mark ${movie.title} as ${movie.watched ? "pending" : "watched"}`));
     const choose = row.querySelector(".choose-movie");
     choose.dataset.id = movie.id;
-    choose.setAttribute("aria-label", `Elegir ${movie.title} para mi plan`);
+    choose.setAttribute("aria-label", t(`Elegir ${movie.title} para mi plan`, `Choose ${movie.title} for my plan`));
     const remove = row.querySelector(".delete-movie");
     remove.dataset.id = movie.id;
-    remove.setAttribute("aria-label", `Eliminar ${movie.title} de la colecci\u00f3n del grupo`);
+    remove.setAttribute("aria-label", t(`Eliminar ${movie.title} de la colecci\u00f3n del grupo`, `Delete ${movie.title} from the group's collection`));
     remove.hidden = !canDeletePartyEntry(movie.addedBy);
     remove.disabled = sharedBusy();
     fragment.append(row);
   });
   $("movie-list").replaceChildren(fragment);
-  $("movie-list").setAttribute("aria-label", showWatched ? "Pel\u00edculas ya vistas" : "Pel\u00edculas pendientes");
+  $("movie-list").setAttribute("aria-label", showWatched ? t("Pel\u00edculas ya vistas", "Watched movies") : t("Pel\u00edculas pendientes", "Pending movies"));
   $("movie-empty").hidden = movies.length > 0;
-  $("movie-empty-title").textContent = showWatched ? "Aqu\u00ed ir\u00e1n tus historias vividas." : "\u00a1Te has puesto al d\u00eda!";
-  $("movie-empty-description").textContent = showWatched ? "Marca una pel\u00edcula como vista o completa una movie night." : "A\u00f1ade otra peli o vuelve a disfrutar de una de tus favoritas.";
+  $("movie-empty-title").textContent = showWatched ? t("Aqu\u00ed ir\u00e1n tus historias vividas.", "Your watched stories will appear here.") : t("\u00a1Te has puesto al d\u00eda!", "You're all caught up!");
+  $("movie-empty-description").textContent = showWatched ? t("Marca una pel\u00edcula como vista o completa una movie night.", "Mark a movie as watched or complete a movie night.")
+    : t("A\u00f1ade otra peli o vuelve a disfrutar de una de tus favoritas.", "Add another movie or enjoy a favorite again.");
 }
 
 async function savePlan(event) {
   event?.preventDefault();
-  if (sharedBusy()) { notify("Espera a que termine la operaci\u00f3n de la party."); return; }
+  if (sharedBusy()) { notify(["Espera a que termine la operaci\u00f3n de la party.", "Wait for the party operation to finish."]); return; }
   if (selectionController) {
-    notify("Espera a que termine de cargar la pel\u00edcula antes de guardar el plan.");
+    notify(["Espera a que termine de cargar la pel\u00edcula antes de guardar el plan.", "Wait for the movie to finish loading before saving the plan."]);
     return;
   }
   const { movieId, foodId } = state.draft;
   if (!movieById(movieId) || !foodById(foodId)) {
-    notify("Elige una pel\u00edcula y una comida antes de guardar el plan.");
+    notify(["Elige una pel\u00edcula y una comida antes de guardar el plan.", "Choose a movie and food before saving the plan."]);
     return;
   }
   const dateInput = $("plan-date");
   const placeInput = $("plan-place");
-  dateInput.setCustomValidity("");
-  placeInput.setCustomValidity("");
+  setValidationMessage(dateInput);
+  setValidationMessage(placeInput);
   const date = dateInput.value;
   const place = placeInput.value.trim();
-  if (!isValidDate(date)) dateInput.setCustomValidity("Elige una fecha v\u00e1lida con un a\u00f1o de cuatro cifras.");
-  if (!place) placeInput.setCustomValidity("Escribe d\u00f3nde ser\u00e1 tu movie night.");
+  if (!isValidDate(date)) setValidationMessage(dateInput, "Elige una fecha v\u00e1lida con un a\u00f1o de cuatro cifras.", "Choose a valid date with a four-digit year.");
+  if (!place) setValidationMessage(placeInput, "Escribe d\u00f3nde ser\u00e1 tu movie night.", "Enter where your movie night will take place.");
   if (!$("plan-form").reportValidity()) return;
 
   const duplicate = state.plans.some((plan) => plan.movieId === movieId && plan.foodId === foodId
     && plan.date === date && plan.place.toLocaleLowerCase("es") === place.toLocaleLowerCase("es"));
   if (duplicate) {
-    notify("Ese plan ya est\u00e1 en tus movie nights.");
+    notify(["Ese plan ya est\u00e1 en tus movie nights.", "That plan is already in your movie nights."]);
     return;
   }
   const plan = { id: crypto.randomUUID(), movieId, foodId, date, place, completed: false };
@@ -878,14 +1026,15 @@ async function savePlan(event) {
   const saved = persistState();
   renderPlans();
   renderOrganizer();
-  notify(saved || party.session ? "Movie night guardada. Ya tienes algo bueno que esperar." : "Plan creado solo para esta sesi\u00f3n. No se pudo guardar en el navegador.");
+  notify(saved || party.session ? ["Movie night guardada. Ya tienes algo bueno que esperar.", "Movie night saved. You have something good to look forward to."]
+    : ["Plan creado solo para esta sesi\u00f3n. No se pudo guardar en el navegador.", "Plan created for this session only. It could not be saved in the browser."]);
 }
 
 async function togglePlan(id) {
-  if (sharedBusy()) { notify("Espera a que termine la operaci\u00f3n de la party."); return; }
+  if (sharedBusy()) { notify(["Espera a que termine la operaci\u00f3n de la party.", "Wait for the party operation to finish."]); return; }
   const plan = state.plans.find((item) => item.id === id);
   if (!plan) {
-    notify("No se encontr\u00f3 el plan que quieres actualizar.");
+    notify(["No se encontr\u00f3 el plan que quieres actualizar.", "The plan you want to update was not found."]);
     return;
   }
   const activeIndex = [...$("plan-list").children].findIndex((row) => row.contains(document.activeElement));
@@ -902,17 +1051,20 @@ async function togglePlan(id) {
   renderMovies();
   renderPicker();
   if (activeIndex >= 0) focusAfterRemoval("plan-list", ".complete-plan", activeIndex, `[data-plan-tab="${state.preferences.planTab}"]`);
-  notify(completed ? "Noche completada y pel\u00edcula marcada como vista." : "Tu noche vuelve a estar programada.");
+  notify(completed ? ["Noche completada y pel\u00edcula marcada como vista.", "Night completed and movie marked as watched."]
+    : ["Tu noche vuelve a estar programada.", "Your night is scheduled again."]);
 }
 
 async function deletePlan(id) {
-  if (sharedBusy()) { notify("Espera a que termine la operaci\u00f3n de la party."); return; }
+  if (sharedBusy()) { notify(["Espera a que termine la operaci\u00f3n de la party.", "Wait for the party operation to finish."]); return; }
   const plan = state.plans.find((item) => item.id === id);
   if (!plan) {
-    notify("No se encontr\u00f3 el plan que quieres eliminar.");
+    notify(["No se encontr\u00f3 el plan que quieres eliminar.", "The plan you want to delete was not found."]);
     return;
   }
-  if (!window.confirm(`\u00bfEliminar el plan de "${movieById(plan.movieId).title}"? La pel\u00edcula seguir\u00e1 en tu colecci\u00f3n.`)) return;
+  const title = moviePresentation(movieById(plan.movieId)).title;
+  if (!window.confirm(t(`\u00bfEliminar el plan de "${title}"? La pel\u00edcula seguir\u00e1 en tu colecci\u00f3n.`,
+    `Delete the plan for "${title}"? The movie will stay in your collection.`))) return;
   const index = [...$("plan-list").children].findIndex((row) => row.contains(document.activeElement));
   if (party.session) {
     if (!await writeParty(`/plans/${encodeURIComponent(id)}`, "DELETE")) return;
@@ -920,7 +1072,7 @@ async function deletePlan(id) {
   persistState();
   renderPlans();
   focusAfterRemoval("plan-list", ".delete-plan", Math.max(0, index), `[data-plan-tab="${state.preferences.planTab}"]`);
-  notify("Plan eliminado. Tu colecci\u00f3n sigue intacta.");
+  notify(["Plan eliminado. Tu colecci\u00f3n sigue intacta.", "Plan deleted. Your collection is still intact."]);
 }
 
 function focusAfterRemoval(listId, selector, index, fallback) {
@@ -931,23 +1083,24 @@ function focusAfterRemoval(listId, selector, index, fallback) {
 
 function renderPlans() {
   const completed = state.plans.filter((plan) => plan.completed).length;
-  $("nights-total").textContent = state.plans.length;
-  $("scheduled-count").textContent = state.plans.length - completed;
-  $("completed-count").textContent = completed;
+  $("nights-total").textContent = state.plans.length.toLocaleString(activeLanguage);
+  $("scheduled-count").textContent = (state.plans.length - completed).toLocaleString(activeLanguage);
+  $("completed-count").textContent = completed.toLocaleString(activeLanguage);
   const showCompleted = state.preferences.planTab === "completed";
   document.querySelectorAll("[data-plan-tab]").forEach((button) => {
     button.setAttribute("aria-pressed", String(button.dataset.planTab === state.preferences.planTab));
   });
   const plans = state.plans.filter((plan) => plan.completed === showCompleted)
     .sort((a, b) => showCompleted ? b.date.localeCompare(a.date) : a.date.localeCompare(b.date));
-  const dateFormatter = new Intl.DateTimeFormat("es", { day: "numeric", month: "short", year: "numeric" });
+  const dateFormatter = new Intl.DateTimeFormat(activeLanguage, { day: "numeric", month: "short", year: "numeric" });
   const fragment = document.createDocumentFragment();
   plans.forEach((plan) => {
     const movie = moviePresentation(movieById(plan.movieId));
     const row = $("plan-row-template").content.firstElementChild.cloneNode(true);
+    translateInterface(row);
     row.querySelector(".plan-movie-title").textContent = movie.title;
-    row.querySelector(".plan-movie-title").lang = movie.language ?? "es";
-    row.querySelector(".plan-author").textContent = plan.createdByName ? `Plan de ${plan.createdByName}` : "";
+    row.querySelector(".plan-movie-title").lang = movie.tmdbId ? (movie.language ?? "es-ES") : activeLanguage;
+    row.querySelector(".plan-author").textContent = plan.createdByName ? t(`Plan de ${plan.createdByName}`, `Planned by ${plan.createdByName}`) : "";
     const time = row.querySelector("time");
     time.dateTime = plan.date;
     time.textContent = dateFormatter.format(new Date(`${plan.date}T12:00:00`));
@@ -956,19 +1109,21 @@ function renderPlans() {
     const toggle = row.querySelector(".complete-plan");
     toggle.dataset.id = plan.id;
     toggle.setAttribute("aria-pressed", String(plan.completed));
-    toggle.setAttribute("aria-label", `${plan.completed ? "Reabrir" : "Completar"} el plan de ${movie.title}`);
-    toggle.querySelector("span").textContent = plan.completed ? "Reabrir" : "Completar";
+    toggle.setAttribute("aria-label", t(`${plan.completed ? "Reabrir" : "Completar"} el plan de ${movie.title}`,
+      `${plan.completed ? "Reopen" : "Complete"} the plan for ${movie.title}`));
+    toggle.querySelector("span").textContent = plan.completed ? t("Reabrir", "Reopen") : t("Completar", "Complete");
     const remove = row.querySelector(".delete-plan");
     remove.dataset.id = plan.id;
-    remove.setAttribute("aria-label", `Eliminar el plan de ${movie.title}`);
+    remove.setAttribute("aria-label", t(`Eliminar el plan de ${movie.title}`, `Delete the plan for ${movie.title}`));
     remove.hidden = Boolean(party.session && !canDeletePartyEntry(plan.createdBy));
     fragment.append(row);
   });
   $("plan-list").replaceChildren(fragment);
-  $("plan-list").setAttribute("aria-label", showCompleted ? "Movie nights completadas" : "Movie nights programadas");
+  $("plan-list").setAttribute("aria-label", showCompleted ? t("Movie nights completadas", "Completed movie nights") : t("Movie nights programadas", "Scheduled movie nights"));
   $("plans-empty").hidden = plans.length > 0;
-  $("plans-empty-title").textContent = showCompleted ? "Todav\u00eda no hay noches completadas." : "Todav\u00eda no hay planes.";
-  $("plans-empty-description").textContent = showCompleted ? "Cuando completes un plan, aparecer\u00e1 aqu\u00ed." : "Elige una peli y guarda tu primera noche.";
+  $("plans-empty-title").textContent = showCompleted ? t("Todav\u00eda no hay noches completadas.", "No completed nights yet.") : t("Todav\u00eda no hay planes.", "No plans yet.");
+  $("plans-empty-description").textContent = showCompleted ? t("Cuando completes un plan, aparecer\u00e1 aqu\u00ed.", "Completed plans will appear here.")
+    : t("Elige una peli y guarda tu primera noche.", "Choose a movie and save your first night.");
   $("empty-plan-link").hidden = showCompleted;
 }
 
@@ -976,9 +1131,10 @@ function renderTheme() {
   document.documentElement.dataset.theme = state.theme;
   document.documentElement.dataset.colorMode = state.colorMode;
   $("theme-label").textContent = THEMES[state.theme];
-  $("color-mode-label").textContent = COLOR_MODES[state.colorMode];
+  $("color-mode-label").textContent = t(COLOR_MODES[state.colorMode], state.colorMode === "dark" ? "Dark" : "Light");
   $("color-mode-toggle").setAttribute("aria-pressed", String(state.colorMode === "dark"));
-  $("color-mode-toggle").title = state.colorMode === "dark" ? "Cambiar a modo claro" : "Cambiar a modo oscuro";
+  $("color-mode-toggle").setAttribute("aria-label", t("Modo oscuro", "Dark mode"));
+  $("color-mode-toggle").title = state.colorMode === "dark" ? t("Cambiar a modo claro", "Switch to light mode") : t("Cambiar a modo oscuro", "Switch to dark mode");
   document.querySelectorAll('input[name="theme"]').forEach((input) => { input.checked = input.value === state.theme; });
   document.querySelector('meta[name="theme-color"]').content = getComputedStyle(document.documentElement).getPropertyValue("--page").trim();
 }
@@ -1011,27 +1167,54 @@ function renderOrganizer() {
   if (view === "catalog" && api.baseUrl && !catalog.loaded) loadCatalog();
 }
 
-function renderAll() {
+function preserveRenderedFocus(render) {
+  const focused = document.activeElement;
+  const list = focused.closest("#movie-list, #plan-list, #catalog-list");
+  const buttons = list ? [...list.querySelectorAll("button")] : [];
+  const index = buttons.indexOf(focused);
+  render();
+  if (index < 0) return;
+  const replacements = [...list.querySelectorAll("button")].filter((button) => !button.hidden && !button.disabled);
+  const replacement = replacements.find((button) => button.className === focused.className
+    && button.dataset.id === focused.dataset.id && button.dataset.tmdbId === focused.dataset.tmdbId);
+  (replacement ?? replacements[Math.min(index, replacements.length - 1)]
+    ?? document.querySelector(`[data-view="${state.preferences.view ?? "plans"}"]`))?.focus({ preventScroll: true });
+}
+
+function renderAll({ preserveFormValues = false } = {}) {
+  activeLanguage = catalogLanguage();
+  document.documentElement.lang = activeLanguage;
   syncCatalogLanguage();
-  renderTheme();
-  renderPicker();
-  renderMovies();
-  renderPlans();
-  renderCatalog();
-  renderOrganizer();
+  syncLocalizationContext();
+  translateInterface();
+  preserveRenderedFocus(() => {
+    renderTheme();
+    renderPicker();
+    renderMovies();
+    renderPlans();
+    renderCatalog();
+    renderOrganizer();
+    renderParty();
+  });
+  renderLanguageStatus();
+  if (storageMessages && !$("storage-notice").hidden) $("storage-notice").textContent = localizedText(storageMessages);
+  if (toastMessages && !$("toast").hidden) $("toast").textContent = localizedText(toastMessages);
   $("api-setup-notice").hidden = Boolean(api.baseUrl);
-  if (api.error) $("catalog-status").textContent = api.error;
+  if (api.error) $("catalog-status").textContent = localizedText(api.error);
   $("movie-source").value = movieSource();
   $("movie-genre").value = state.preferences.genre;
   $("pending-only").checked = state.preferences.pendingOnly;
   $("auto-food").checked = state.preferences.autoFood;
-  $("plan-date").value = state.draft.date;
-  $("plan-place").value = state.draft.place;
+  if (!preserveFormValues) {
+    $("plan-date").value = state.draft.date;
+    $("plan-place").value = state.draft.place;
+  }
 }
 
 // Delegated list events continue working after templates are re-rendered.
 $("random-movie").addEventListener("click", () => randomMovie());
 $("catalog-language").addEventListener("change", (event) => changeCatalogLanguage(event.target.value));
+$("language-retry").addEventListener("click", () => refreshSelectedLanguage({ retry: true }));
 $("random-food").addEventListener("click", randomFood);
 $("retry-movie").addEventListener("click", () => selectionRetry?.());
 $("movie-poster").addEventListener("error", () => {
@@ -1078,12 +1261,12 @@ $("catalog-list").addEventListener("click", (event) => {
   if (!button) return;
   const movie = catalog.results.find((item) => item.tmdbId === Number(button.dataset.tmdbId));
   if (movie) chooseCatalogMovie(movie);
-  else notify("Los resultados han cambiado. Vuelve a elegir una pel\u00edcula.");
+  else notify(["Los resultados han cambiado. Vuelve a elegir una pel\u00edcula.", "The results have changed. Choose a movie again."]);
 });
 $("plan-form").addEventListener("submit", savePlan);
 ["plan-date", "plan-place"].forEach((id) => {
   $(id).addEventListener("input", (event) => {
-    event.target.setCustomValidity("");
+    setValidationMessage(event.target);
     const field = id === "plan-date" ? "date" : "place";
     // An unfinished date stays in the form until the browser has a valid date value.
     if (field === "date" && event.target.value !== "" && !isValidDate(event.target.value)) return;
@@ -1102,7 +1285,7 @@ $("show-add-movie").addEventListener("click", () => {
   $("new-movie-title").focus();
 });
 $("cancel-add-movie").addEventListener("click", closeAddMovie);
-$("new-movie-title").addEventListener("input", () => $("new-movie-title").setCustomValidity(""));
+$("new-movie-title").addEventListener("input", () => setValidationMessage($("new-movie-title")));
 $("add-movie-form").addEventListener("submit", addMovie);
 $("movie-list").addEventListener("click", (event) => {
   const watch = event.target.closest(".watch-toggle");
@@ -1153,7 +1336,7 @@ $("theme-toggle").addEventListener("click", () => {
 $("theme-menu").addEventListener("change", (event) => {
   if (!event.target.matches('input[name="theme"]')) return;
   if (!Object.hasOwn(THEMES, event.target.value)) {
-    notify("Elige un tema de interfaz v\u00e1lido.");
+    notify(["Elige un tema de interfaz v\u00e1lido.", "Choose a valid interface theme."]);
     return;
   }
   state.theme = event.target.value;
@@ -1198,7 +1381,7 @@ window.addEventListener("storage", (event) => {
   $("storage-notice").hidden = true;
   renderAll();
   refreshSelectedLanguage();
-  notify("La colecci\u00f3n se ha actualizado desde otra pesta\u00f1a.");
+  notify(["La colecci\u00f3n se ha actualizado desde otra pesta\u00f1a.", "The collection was updated from another tab."]);
 });
 
 renderAll();

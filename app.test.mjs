@@ -5,7 +5,8 @@ import vm from "node:vm";
 import worker from "./proxy/worker.mjs";
 import { D1Database } from "./proxy/d1-fixture.mjs";
 
-const source = readFileSync(new URL("./parties.js", import.meta.url), "utf8")
+const translations = readFileSync(new URL("./i18n.js", import.meta.url), "utf8");
+const source = translations + "\n" + readFileSync(new URL("./parties.js", import.meta.url), "utf8")
   + "\n" + readFileSync(new URL("./app.js", import.meta.url), "utf8");
 const html = readFileSync(new URL("./index.html", import.meta.url), "utf8");
 const styles = readFileSync(new URL("./styles.css", import.meta.url), "utf8");
@@ -48,14 +49,43 @@ class Element {
     if (!this.nodes.has(selector)) this.nodes.set(selector, new Element());
     return this.nodes.get(selector);
   }
-  querySelectorAll() { return []; }
-  matches(selector) { return selector === 'input[name="theme"]' && this.name === "theme"; }
+  querySelectorAll(selector) {
+    const found = new Set();
+    const visit = (node) => {
+      if (found.has(node)) return;
+      found.add(node);
+      [...node.nodes.values(), ...node.children].forEach(visit);
+    };
+    [...this.nodes.values(), ...this.children].forEach(visit);
+    return [...found].filter((node) => node.matches(selector));
+  }
+  matches(selector) {
+    if (selector === 'input[name="theme"]') return this.name === "theme";
+    const attribute = /^\[(data-[\w-]+)\]$/.exec(selector);
+    if (attribute) return this.hasAttribute(attribute[1]);
+    return selector === "template" && this.tagName === "template";
+  }
   addEventListener(name, callback) { this.listeners[name] = callback; }
-  setAttribute(name, value) { this.attributes[name] = value; }
-  removeAttribute(name) { delete this[name]; }
+  setAttribute(name, value) {
+    this.attributes[name] = value;
+    if (name.startsWith("data-")) this.dataset[name.slice(5).replace(/-([a-z])/g, (_, c) => c.toUpperCase())] = value;
+  }
+  getAttribute(name) {
+    if (name.startsWith("data-")) return this.dataset[name.slice(5).replace(/-([a-z])/g, (_, c) => c.toUpperCase())] ?? null;
+    return this.attributes[name] ?? null;
+  }
+  hasAttribute(name) { return this.getAttribute(name) !== null; }
+  removeAttribute(name) { delete this[name]; delete this.attributes[name]; }
   append(...children) { this.children.push(...children); }
   replaceChildren(fragment) { this.children = fragment.children; }
-  cloneNode() { return new Element(); }
+  cloneNode() {
+    const clone = new Element();
+    clone.textContent = this.textContent;
+    clone.attributes = { ...this.attributes };
+    clone.dataset = { ...this.dataset };
+    clone.nodes = new Map([...this.nodes].map(([key, node]) => [key, node.cloneNode()]));
+    return clone;
+  }
   closest() { return null; }
   contains() { return false; }
   focus() { if (this.ownerDocument) this.ownerDocument.activeElement = this; }
@@ -65,8 +95,33 @@ class Element {
   scrollIntoView() {}
   select() {}
   reportValidity() { return true; }
-  setCustomValidity() {}
+  setCustomValidity(message) { this.validationMessage = message; }
   reset() {}
+}
+
+function decodeHtml(value) {
+  const entities = {
+    amp: "&", quot: '"', apos: "'", lt: "<", gt: ">", nbsp: "\u00a0", mdash: "\u2014", ndash: "\u2013", rarr: "\u2192",
+    aacute: "\u00e1", eacute: "\u00e9", iacute: "\u00ed", oacute: "\u00f3", uacute: "\u00fa", ntilde: "\u00f1",
+    Aacute: "\u00c1", Eacute: "\u00c9", Iacute: "\u00cd", Oacute: "\u00d3", Uacute: "\u00da", Ntilde: "\u00d1",
+  };
+  return value.replace(/&(#x[\da-f]+|#\d+|\w+);/gi, (_match, entity) => {
+    if (entity.startsWith("#")) return String.fromCodePoint(parseInt(entity.slice(entity[1] === "x" ? 2 : 1), entity[1] === "x" ? 16 : 10));
+    assert.ok(Object.hasOwn(entities, entity), `Unknown HTML entity ${entity}`);
+    return entities[entity];
+  });
+}
+
+function markupElements(markup, nodes = new Map()) {
+  return [...markup.matchAll(/<([a-z][\w:-]*)\b([^>]*?)>([^<]*)/gi)].map(([, tagName, attributes, content]) => {
+    const attrs = [...attributes.matchAll(/([\w-]+)="([^"]*)"/g)].map(([, key, value]) => [key, decodeHtml(value)]);
+    const id = attrs.find(([key]) => key === "id")?.[1];
+    const element = nodes.get(id) ?? new Element();
+    element.tagName = tagName;
+    attrs.forEach(([key, value]) => element.setAttribute(key, value));
+    if (element.dataset.en) element.textContent = decodeHtml(content);
+    return element;
+  });
 }
 
 function app({
@@ -74,8 +129,17 @@ function app({
   fetch = async () => { throw new Error("Unexpected request"); },
 } = {}) {
   const nodes = new Map([...html.matchAll(/\bid="([^"]+)"/g)].map((match) => [match[1], new Element()]));
+  const marked = markupElements(html, nodes).filter((element) =>
+    Object.keys(element.attributes).some((key) => key.startsWith("data-en")));
   for (const id of ["movie-row-template", "plan-row-template", "catalog-row-template", "cast-member-template"]) {
-    nodes.get(id).content = { firstElementChild: new Element() };
+    const template = html.match(new RegExp(`<template id="${id}">([\\s\\S]*?)</template>`))[1];
+    const root = new Element();
+    markupElements(template).forEach((element) => {
+      for (const name of (element.getAttribute("class") ?? "").split(" ").filter(Boolean)) root.nodes.set(`.${name}`, element);
+    });
+    nodes.get(id).content = new Element();
+    nodes.get(id).content.children.push(root);
+    nodes.get(id).content.firstElementChild = root;
   }
   const document = new Element();
   document.documentElement = new Element();
@@ -86,7 +150,12 @@ function app({
     input.value = match[1];
     return input;
   });
-  document.querySelectorAll = (selector) => selector === 'input[name="theme"]' ? themes : [];
+  document.querySelectorAll = (selector) => {
+    if (selector === 'input[name="theme"]') return themes;
+    const all = new Set([...marked, ...nodes.values()]);
+    nodes.forEach((node) => node.querySelectorAll(selector).forEach((child) => all.add(child)));
+    return [...all].filter((node) => node.matches(selector));
+  };
   nodes.forEach((node) => { node.ownerDocument = document; });
   document.getElementById = (id) => {
     assert.ok(nodes.has(id), `Element #${id} must exist in index.html`);
@@ -118,7 +187,7 @@ function app({
   });
   vm.runInContext(source, context);
   return {
-    nodes, storage, context, errors, window, document, themes, timers,
+    nodes, storage, context, errors, window, document, themes, timers, marked,
     run: (code) => vm.runInContext(code, context),
     set(name, value) { context[name] = value; },
   };
@@ -133,6 +202,155 @@ test("fresh users get no fixed movie list and a clear setup state", () => {
   assert.equal(ui.nodes.get("random-movie").disabled, true);
   assert.equal(ui.nodes.get("movie-score").hidden, true);
   assert.equal(ui.nodes.get("movie-cast").hidden, true);
+});
+
+test("the language selector translates all marked copy and attributes reversibly, including templates", async () => {
+  const ui = app();
+  assert.ok(ui.marked.length > 100, "The full interface must have explicit translations");
+  const originals = ui.marked.map((element) => ({
+    text: element.textContent,
+    attributes: Object.fromEntries(["aria-label", "placeholder", "title", "content"]
+      .filter((attribute) => element.hasAttribute(`data-en-${attribute}`))
+      .map((attribute) => [attribute, element.getAttribute(attribute)])),
+  }));
+  await ui.run("changeCatalogLanguage('en-US')");
+  assert.equal(ui.document.documentElement.lang, "en-US");
+  for (const element of ui.marked) {
+    if (element.dataset.en) assert.equal(element.textContent, element.dataset.en);
+    for (const attribute of ["aria-label", "placeholder", "title", "content"]) {
+      if (element.hasAttribute(`data-en-${attribute}`)) {
+        assert.equal(element.getAttribute(attribute), element.getAttribute(`data-en-${attribute}`));
+      }
+    }
+  }
+  assert.equal(ui.nodes.get("plan-place").getAttribute("placeholder"), "My couch");
+  assert.equal(ui.nodes.get("party-name").getAttribute("placeholder"), "Friday movie night");
+  assert.equal(ui.nodes.get("cast-member-template").content.firstElementChild
+    .querySelector(".cast-placeholder").textContent, "No photo");
+  await ui.run("changeCatalogLanguage('es-ES')");
+  assert.equal(ui.document.documentElement.lang, "es-ES");
+  ui.marked.forEach((element, index) => {
+    if (element.dataset.en) assert.equal(element.textContent, originals[index].text);
+    for (const [attribute, value] of Object.entries(originals[index].attributes)) {
+      assert.equal(element.getAttribute(attribute), value);
+    }
+  });
+});
+
+test("app language is a single global option inside Preferences rather than a catalog filter", () => {
+  const preferences = html.match(/<details id="picker-options"[\s\S]*?<\/details>/)[0];
+  assert.match(preferences, /<label for="catalog-language"><span data-en="App language">Idioma de la app<\/span>/);
+  assert.match(preferences, /<select id="catalog-language"/);
+  assert.equal([...html.matchAll(/id="catalog-language"/g)].length, 1);
+  const catalog = html.match(/<section id="catalog"[\s\S]*?<\/section>/)[0];
+  assert.doesNotMatch(catalog, /id="catalog-language"/);
+  assert.doesNotMatch(html, /No cambia el idioma de los men/);
+  const header = html.match(/<header class="site-header[\s\S]*?<\/header>/)[0];
+  assert.match(header, /class="appearance-controls"[\s\S]*id="color-mode-toggle"[\s\S]*id="theme-toggle"[\s\S]*id="picker-options"/);
+  const planner = html.match(/<section id="planner"[\s\S]*?<\/section>/)[0];
+  assert.doesNotMatch(planner, /id="picker-options"/);
+});
+
+test("English planner, food, dates and confirmation copy preserve manual content and unfinished forms", async () => {
+  const ui = app();
+  const title = "La noche de Ana <b>literal</b>";
+  ui.set("manualTitle", title);
+  ui.run(`state.movies.push({ id: "manual", title: manualTitle, genre: "cozy", year: null,
+    minutes: null, description: "Una sinopsis escrita por Ana.", watched: false, custom: true });
+    state.draft = { movieId: "manual", foodId: "pizza", date: "2026-09-10", place: "La casa de Ana" };
+    state.plans.push({ id: "night", movieId: "manual", foodId: "pizza", date: "2026-09-10", place: "La casa de Ana", completed: false });
+    state.preferences.view = "plans"; renderAll();`);
+  ui.nodes.get("new-movie-title").value = "Una peli sin terminar";
+  ui.nodes.get("catalog-query").value = "Una consulta sin enviar";
+  ui.nodes.get("party-display-name").value = "Ana";
+  ui.nodes.get("new-movie-title").focus();
+  const previous = JSON.parse(ui.run("JSON.stringify(state)"));
+  await ui.run("changeCatalogLanguage('en-US')");
+  assert.equal(ui.nodes.get("movie-title").textContent, title);
+  assert.equal(ui.nodes.get("movie-description").textContent, "Una sinopsis escrita por Ana.");
+  assert.equal(ui.nodes.get("food-name").textContent, "Pizza to share");
+  assert.equal(ui.nodes.get("movie-badge").textContent, "COMEDY, ROMANCE, AND FAMILY");
+  assert.equal(ui.nodes.get("color-mode-label").textContent, "Light");
+  assert.equal(ui.nodes.get("collection-label").textContent, "My collection");
+  assert.equal(ui.nodes.get("nights-label").textContent, "My nights");
+  assert.equal(ui.nodes.get("new-movie-title").value, "Una peli sin terminar");
+  assert.equal(ui.nodes.get("catalog-query").value, "Una consulta sin enviar");
+  assert.equal(ui.nodes.get("party-display-name").value, "Ana");
+  assert.equal(ui.nodes.get("plan-place").value, "La casa de Ana");
+  assert.equal(ui.document.activeElement, ui.nodes.get("new-movie-title"));
+  assert.equal(ui.nodes.get("plan-list").children[0].querySelector("time").textContent,
+    new Intl.DateTimeFormat("en-US", { day: "numeric", month: "short", year: "numeric" }).format(new Date("2026-09-10T12:00:00")));
+  assert.deepEqual(JSON.parse(ui.run("JSON.stringify(state)")),
+    { ...previous, preferences: { ...previous.preferences, language: "en-US" } });
+  let confirmation;
+  ui.window.confirm = (message) => { confirmation = message; return false; };
+  await ui.run("deletePlan('night')");
+  assert.match(confirmation, /Delete/);
+  assert.ok(confirmation.includes(title));
+  assert.equal(ui.run("state.plans.length"), 1);
+});
+
+test("native and custom form validation messages follow language without changing input", async () => {
+  const ui = app();
+  const input = ui.nodes.get("party-name");
+  input.validity = { valueMissing: true, customError: false };
+  ui.document.listeners.invalid({ target: input });
+  assert.equal(input.validationMessage, "Completa este campo.");
+  ui.run("setValidationMessage($('new-movie-title'), 'Escribe un titulo.', 'Enter a title.')");
+  await ui.run("changeCatalogLanguage('en-US')");
+  assert.equal(input.validationMessage, "Complete this field.");
+  assert.equal(ui.nodes.get("new-movie-title").validationMessage, "Enter a title.");
+  input.value = "Viernes";
+  ui.document.listeners.input({ target: input });
+  assert.equal(input.validationMessage, "");
+  assert.equal(input.value, "Viernes");
+});
+
+test("all current public API diagnostics have an English translation without changing the Worker contract", () => {
+  const context = vm.createContext({ document: new Element(), TypeError });
+  vm.runInContext(translations, context);
+  const sources = ["worker.mjs", "parties.mjs"].map((file) => readFileSync(new URL(`./proxy/${file}`, import.meta.url), "utf8")).join("\n");
+  const messageLiterals = [
+    ...sources.matchAll(/new (?:HttpError|PartyError)\(\d+,\s*"((?:\\.|[^"\\])*)"/g),
+    ...sources.matchAll(/invalid\("((?:\\.|[^"\\])*)"\)/g),
+    ...sources.matchAll(/(?:error:|message =)\s*"((?:\\.|[^"\\])*)"/g),
+  ];
+  const messages = new Set(messageLiterals.map((match) => JSON.parse(`"${match[1]}"`)));
+  assert.ok(messages.size > 25);
+  vm.runInContext("activeLanguage = 'en-US'", context);
+  for (const message of messages) {
+    context.message = message;
+    assert.equal(vm.runInContext("Object.hasOwn(API_ERROR_TRANSLATIONS, message)", context), true, message);
+    const english = vm.runInContext("localizedApiError(message)", context);
+    assert.equal(typeof english, "string");
+    assert.notEqual(english, message);
+  }
+  assert.equal(vm.runInContext("localizedApiError('Unexpected external diagnostic')", context), "Unexpected external diagnostic");
+});
+
+test("the translation boundary touches only marked app text and never replaces surrounding controls", () => {
+  const document = new Element();
+  const label = new Element();
+  label.setAttribute("data-en", "Date");
+  label.textContent = "Fecha";
+  const input = new Element();
+  input.value = "La casa de Ana";
+  input.textContent = "Mi texto";
+  document.nodes.set("label", label);
+  document.nodes.set("input", input);
+  const context = vm.createContext({ document, TypeError });
+  vm.runInContext(translations, context);
+  vm.runInContext("activeLanguage = 'en-US'; translateInterface()", context);
+  assert.equal(label.textContent, "Date");
+  assert.equal(input.value, "La casa de Ana");
+  assert.equal(input.textContent, "Mi texto");
+  vm.runInContext("activeLanguage = 'es-ES'; translateInterface()", context);
+  assert.equal(label.textContent, "Fecha");
+  const markedTags = [...html.matchAll(/<([a-z][\w:-]*)\b[^>]*\bdata-en="[^"]*"[^>]*>([\s\S]*?)<\/\1>/gi)];
+  assert.ok(markedTags.length > 70);
+  for (const [, tag, content] of markedTags) assert.doesNotMatch(content, /<[a-z]/i, `Marked ${tag} must be a leaf text node`);
+  assert.ok(html.indexOf("./i18n.js") < html.indexOf("./parties.js"));
+  assert.ok(html.indexOf("./i18n.js") < html.indexOf("./app.js"));
 });
 
 test("catalog language defaults to Spanish, migrates older storage, and persists valid choices", async () => {
@@ -160,7 +378,7 @@ test("catalog language defaults to Spanish, migrates older storage, and persists
   }
   await ui.nodes.get("catalog-language").listeners.change({ target: { value: "fr-FR" } });
   assert.equal(ui.nodes.get("catalog-language").value, "en-US");
-  assert.match(ui.nodes.get("toast").textContent, /idioma/);
+  assert.match(ui.nodes.get("toast").textContent, /language/);
   assert.equal(ui.storage.get("movie-night:v1"), raw);
 });
 
@@ -204,7 +422,7 @@ test("switching language refreshes the selected movie without changing watched s
     const data = movie(42, { language, title: language, posterPath: `/${language}.jpg` });
     return json(url.pathname === "/movies" ? page([data]) : { movie: data });
   } });
-  ui.set("result", movie());
+  ui.set("result", movie(42, { title: "es-ES", language: "es-ES", posterPath: "/es-ES.jpg" }));
   ui.run(`saveApiMovie(result).watched = true; selectMovie(result.id);
     state.draft.date = "2026-09-10"; state.draft.place = "Home";
     state.plans.push({ id: "night", movieId: result.id, foodId: "pizza", date: "2026-09-10", place: "Home", completed: true });
@@ -223,12 +441,19 @@ test("switching language refreshes the selected movie without changing watched s
   assert.equal(search.searchParams.get("query"), "Same search");
   assert.equal(search.searchParams.get("genre"), "cozy");
   assert.equal(search.searchParams.get("page"), "1");
-  const reloaded = app({ raw: ui.storage.get("movie-night:v1") });
+  const saved = ui.storage.get("movie-night:v1");
+  assert.deepEqual(JSON.parse(saved).movies, before.movies);
+  const offline = app({ raw: saved });
+  assert.equal(offline.nodes.get("movie-title").textContent, "es-ES");
+  assert.match(offline.nodes.get("language-status").textContent, /Connect the proxy/);
+  const reloaded = app({ raw: saved, config: "https://api.example.com", fetch: ui.context.fetch });
+  await reloaded.run("refreshSelectedLanguage()");
   assert.equal(reloaded.nodes.get("movie-title").textContent, "en-US");
   await ui.nodes.get("catalog-language").listeners.change({ target: { value: "es-ES" } });
   assert.equal(ui.nodes.get("movie-title").textContent, "es-ES");
   await ui.nodes.get("catalog-language").listeners.change({ target: { value: "en-US" } });
-  assert.equal(JSON.parse(ui.storage.get("movie-night:v1")).movies[0].language, "en-US");
+  assert.deepEqual(JSON.parse(ui.storage.get("movie-night:v1")).movies, before.movies);
+  assert.equal(JSON.parse(ui.storage.get("movie-night:v1")).preferences.language, "en-US");
 });
 
 test("switching back during a language refresh ignores the late translated details", async () => {
@@ -284,7 +509,7 @@ test("language sync from another tab invalidates hidden catalog results without 
   assert.equal(ui.nodes.get("catalog-language").value, "en-US");
   assert.equal(ui.run("catalog.loaded"), false);
   assert.equal(ui.run("catalog.page"), 1);
-  assert.equal(ui.run("catalog.error"), "");
+  assert.equal(ui.run("catalog.error"), "Old error");
   assert.equal(ui.errors.length, 0);
 });
 
@@ -295,12 +520,12 @@ test("failed language refresh retains the selected movie and exposes a retry wit
     api.baseUrl = "https://api.example.com"`);
   await ui.run("changeCatalogLanguage('en-US')");
   assert.equal(ui.nodes.get("movie-title").textContent, "Movie 42");
-  assert.equal(ui.nodes.get("picker-status").textContent, "Try again");
-  assert.equal(ui.nodes.get("retry-movie").hidden, false);
+  assert.match(ui.nodes.get("language-status").textContent, /Try again/);
+  assert.equal(ui.nodes.get("language-retry").hidden, false);
   ui.set("fetch", async () => json({ movie: movie(42, { title: "English title", language: "en-US" }) }));
-  await ui.nodes.get("retry-movie").listeners.click();
+  await ui.nodes.get("language-retry").listeners.click();
   assert.equal(ui.nodes.get("movie-title").textContent, "English title");
-  assert.equal(ui.nodes.get("retry-movie").hidden, true);
+  assert.equal(ui.nodes.get("language-retry").hidden, true);
   ui.run(`state.movies.push({ id: "manual", title: "My title", genre: "cozy", year: null,
     minutes: null, description: "My synopsis", watched: false, custom: true }); selectMovie("manual")`);
   const previous = ui.run("JSON.stringify(state.movies)");
@@ -326,6 +551,86 @@ test("choosing an existing catalog movie in a different language reloads its det
   assert.equal(ui.nodes.get("movie-title").textContent, "English title");
   await ui.run("chooseCatalogMovie(result)");
   assert.equal(requests, 1);
+});
+
+test("all saved TMDB titles translate with three-request concurrency and selected-first priority", async () => {
+  const ids = [42, 43, 44, 45, 46];
+  const pending = new Map(ids.map((id) => [id, deferred()]));
+  const requests = [];
+  let active = 0;
+  let maximum = 0;
+  const ui = app({ fetch: async (url) => {
+    const id = Number(url.pathname.split("/").at(-1));
+    assert.equal(url.searchParams.get("language"), "en-US");
+    requests.push(id);
+    active++;
+    maximum = Math.max(maximum, active);
+    try { return await pending.get(id).promise; }
+    finally { active--; }
+  } });
+  ui.set("savedMovies", ids.map((id) => movie(id, { language: "es-ES" })));
+  ui.run(`savedMovies.forEach(movie => saveApiMovie(movie)); state.draft.movieId = "tmdb-46";
+    state.draft.foodId = "pizza"; state.preferences.view = "movies"; api.baseUrl = "https://api.example.com"`);
+  const storedMovies = ui.run("JSON.stringify(state.movies)");
+  const translating = ui.run("changeCatalogLanguage('en-US')");
+  assert.deepEqual(requests, [46, 42, 43]);
+  pending.get(46).resolve(json({ movie: movie(46, { title: "English 46", language: "en-US" }) }));
+  await new Promise(setImmediate);
+  assert.deepEqual(requests, [46, 42, 43, 44]);
+  pending.get(42).resolve(json({ movie: movie(42, { title: "English 42", language: "en-US" }) }));
+  await new Promise(setImmediate);
+  assert.deepEqual(requests, [46, 42, 43, 44, 45]);
+  for (const id of [43, 44, 45]) pending.get(id).resolve(json({ movie: movie(id, { title: `English ${id}`, language: "en-US" }) }));
+  await translating;
+  assert.equal(maximum, 3);
+  assert.equal(ui.nodes.get("movie-title").textContent, "English 46");
+  assert.deepEqual(ui.nodes.get("movie-list").children.map((row) => row.querySelector(".movie-row-title").textContent),
+    ids.map((id) => `English ${id}`));
+  assert.equal(ui.run("JSON.stringify(state.movies)"), storedMovies);
+  assert.equal(ui.nodes.get("language-status").hidden, true);
+  await ui.run("changeCatalogLanguage('es-ES'); changeCatalogLanguage('en-US')");
+  assert.equal(requests.length, 5);
+  assert.equal(ui.run("JSON.stringify(state.movies)"), storedMovies);
+});
+
+test("failed background translations require an explicit retry while newly saved movies can still translate", async () => {
+  const requests = [];
+  let failing = true;
+  const ui = app({ fetch: async (url) => {
+    const id = Number(url.pathname.split("/").at(-1));
+    requests.push(id);
+    return id === 42 && failing ? json({ error: "No se encontr\u00f3 la pel\u00edcula en TMDB." }, 404)
+      : json({ movie: movie(id, { language: "en-US", title: `English ${id}` }) });
+  } });
+  ui.set("result", movie());
+  ui.run(`saveApiMovie(result); state.preferences.view = "movies"; api.baseUrl = "https://api.example.com"`);
+  await ui.run("changeCatalogLanguage('en-US')");
+  assert.match(ui.nodes.get("language-status").textContent, /movie was not found on TMDB/);
+  assert.equal(ui.nodes.get("language-retry").hidden, false);
+  await ui.run("refreshSelectedLanguage(); refreshSelectedLanguage()");
+  assert.deepEqual(requests, [42]);
+  ui.set("other", movie(43));
+  ui.run("saveApiMovie(other)");
+  await ui.run("refreshSelectedLanguage()");
+  assert.deepEqual(requests, [42, 43]);
+  assert.equal(ui.run("moviePresentation(movieById('tmdb-43')).title"), "English 43");
+  failing = false;
+  await ui.nodes.get("language-retry").listeners.click();
+  assert.deepEqual(requests, [42, 43, 42]);
+  assert.equal(ui.nodes.get("language-status").hidden, true);
+  assert.equal(ui.nodes.get("language-retry").hidden, true);
+});
+
+test("an older proxy cannot label Spanish metadata as a successful English translation", async () => {
+  const ui = app({ fetch: async () => json({ movie: movie() }) });
+  ui.set("result", movie());
+  ui.run(`saveApiMovie(result); selectMovie(result.id); state.preferences.view = "movies";
+    api.baseUrl = "https://api.example.com"`);
+  await ui.run("changeCatalogLanguage('en-US')");
+  assert.equal(ui.nodes.get("movie-title").textContent, "Movie 42");
+  assert.equal(ui.nodes.get("movie-title").lang, "es-ES");
+  assert.match(ui.nodes.get("language-status").textContent, /proxy did not confirm/);
+  assert.equal(ui.nodes.get("language-retry").hidden, false);
 });
 
 test("the interface defaults to Movie in light mode and separates style from color mode", () => {
@@ -963,6 +1268,33 @@ function enterParty(ui, data = snapshot()) {
   ui.run("api.baseUrl = session.apiBaseUrl; catalog.loaded = true; activateParty(session, snapshot)");
 }
 
+test("party UI, roles, API errors, storage warnings and copy feedback switch language without changing names", async () => {
+  const ui = app({ fetch: async () => json(page([])) });
+  const data = snapshot();
+  data.party.name = "Las noches de Alex";
+  enterParty(ui, data);
+  ui.run("state.preferences.view = 'movies'; openPartyDialog()");
+  ui.set("navigator", { clipboard: { writeText: async () => {} } });
+  await ui.nodes.get("party-copy").listeners.click();
+  ui.run(`reportPartyError(new PartyApiError("La invitaci\\u00f3n no es v\\u00e1lida."));
+    partyStorageError(new TypeError("Storage denied"));`);
+  const stored = ui.run("JSON.stringify(party.snapshot)");
+  await ui.run("changeCatalogLanguage('en-US')");
+  assert.equal(ui.nodes.get("party-title").textContent, data.party.name);
+  assert.match(ui.nodes.get("party-identity").textContent, /Alex.*host/);
+  assert.match(ui.nodes.get("party-members").textContent, /Participants: Alex/);
+  assert.match(ui.nodes.get("party-status").textContent, /invitation.*invalid/i);
+  assert.match(ui.nodes.get("party-storage-notice").textContent, /browser/);
+  assert.match(ui.nodes.get("party-copy-status").textContent, /copied/i);
+  assert.equal(ui.nodes.get("party-dialog").open, true);
+  assert.equal(ui.nodes.get("collection-label").textContent, "Group collection");
+  assert.equal(ui.run("JSON.stringify(party.snapshot)"), stored);
+  await ui.run("changeCatalogLanguage('es-ES')");
+  assert.equal(ui.nodes.get("party-status").textContent, "La invitaci\u00f3n no es v\u00e1lida.");
+  assert.match(ui.nodes.get("party-copy-status").textContent, /Enlace copiado/);
+  assert.equal(ui.run("JSON.stringify(party.snapshot)"), stored);
+});
+
 test("party language preferences stay local and translated selections do not rewrite shared movies", async () => {
   const ui = app({ fetch: async (url, options) => {
     assert.notEqual(options.method, "POST");
@@ -1026,6 +1358,27 @@ test("restored party selections refresh their language and keep earlier translat
   assert.equal(requests.length, count);
   assert.equal(ui.nodes.get("movie-title").textContent, "English 42");
   assert.equal(ui.run("state.movies[0].title"), "Movie 42");
+});
+
+test("leaving a party cancels background translations without altering the personal collection", async () => {
+  const pending = deferred();
+  let signal;
+  const ui = app({ fetch: async (url, options) => {
+    if (url.pathname === "/movies") return json(page([]));
+    signal = options.signal;
+    return pending.promise;
+  } });
+  enterParty(ui, snapshot({ movies: [sharedMovie()] }));
+  ui.run("state.preferences.view = 'movies'; selectMovie('tmdb-42')");
+  const translating = ui.run("changeCatalogLanguage('en-US')");
+  ui.run("leaveParty()");
+  assert.equal(signal.aborted, true);
+  pending.resolve(json({ movie: movie(42, { title: "English title", language: "en-US" }) }));
+  await translating;
+  assert.equal(ui.run("state.movies.length"), 0);
+  assert.equal(ui.run("state.draft.movieId"), null);
+  assert.equal(ui.run("localizedMovies.has('42:en-US')"), false);
+  assert.equal(ui.nodes.get("language-status").hidden, true);
 });
 
 test("party appearance inherits, saves, and restores both style and mode without changing personal settings", () => {
@@ -1425,8 +1778,8 @@ test("movie deletion clears its selected draft and shared nights while preservin
   assert.equal(ui.run("state.movies.length"), 0);
   assert.equal(ui.run("state.plans.length"), 0);
   assert.equal(ui.run("state.draft.movieId"), null);
-  assert.equal(ui.nodes.get("collection-total").textContent, 0);
-  assert.equal(ui.nodes.get("nights-total").textContent, 0);
+  assert.equal(ui.nodes.get("collection-total").textContent, "0");
+  assert.equal(ui.nodes.get("nights-total").textContent, "0");
   assert.equal(ui.nodes.get("movie-empty").hidden, false);
   assert.equal(ui.nodes.get("save-plan").disabled, true);
   assert.match(ui.nodes.get("toast").textContent, /noches asociadas se eliminaron/);

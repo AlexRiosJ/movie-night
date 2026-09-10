@@ -1,6 +1,6 @@
 # Movie Night
 
-A Spanish-language movie-night planner built with plain HTML, CSS, and JavaScript.
+A Spanish/English movie-night planner built with plain HTML, CSS, and JavaScript.
 Search and discover movies through **The Movie Database (TMDB)**, choose food,
 and keep a personal collection and movie-night plans in your browser, or share
 a party's collection and plans with friends.
@@ -17,6 +17,7 @@ movie-night/
   index.html          Page, forms, templates, and original movie artwork
   styles.css          Three interface styles, each with light and dark palettes
   config.js           Public proxy URL only (never a token)
+  i18n.js             Interface translation helpers and public API error translations
   app.js              API client, catalog, collection, plans, and localStorage
   parties.js          Party sessions, invitations, mutations, and polling
   app.test.mjs        Frontend behavior tests using Node's built-in test runner
@@ -100,8 +101,10 @@ Movie responses include `language`, the requested metadata language (not the
 film's original language). TMDB's `poster_path` prefers an image in that language,
 then falls back to an available image. A translated title, synopsis, or poster
 cannot be guaranteed when TMDB has none. No additional image request is needed.
-Deploy the updated Worker before publishing this frontend. This change needs
-no D1 migration; saved movies without a language continue to work.
+The deployed Worker must support this contract before publishing a frontend
+that sends `language`. Interface translations reuse this existing API contract
+and do not require another Worker deployment or any D1 migration. Saved movies
+without a language continue to work.
 
 ## Enable shared parties (optional)
 
@@ -269,16 +272,23 @@ documentation changes.
 - **Explorar** browses popular movies, searches by title, and pages through
   results. With an empty title, the genre selector filters discovery.
   Title searches span all genres and distinguish releases by year.
-- **Idioma del catalogo** above the picker chooses **Español** or **English**
-  for titles, synopses, and posters in discovery, search, details, and random
-  selections. The menus remain in Spanish. Spanish is the default; the choice
-  persists with personal preferences or the local view of each party.
+- **Preferencias > Idioma de la app** (**Preferences > App language**) chooses **Español** or
+  **English** for the entire app: menus, forms, food suggestions, parties,
+  alerts, validation, confirmation dialogs, empty states, accessible labels,
+  dates, and numbers, as well as TMDB titles, synopses, and posters.
+  Spanish is the default; the choice persists with personal preferences or
+  the local view of each party. Switching updates the current page without
+  reloading or resetting unfinished forms, the selected style, or color mode.
+  Preferences sit in the header beside the style and light/dark controls.
   Changing language reloads catalog results from page 1 with the same search
   and genre, cancels older requests, and refreshes the selected TMDB movie
   without changing the draft, food, watched state, or plans.
-  Other saved movies retain their metadata until selected again from TMDB;
-  manual movies are unchanged. Party translations are local presentations,
-  not edits to other members' saved movies. New additions retain their language.
+  Saved TMDB movies also load translated metadata, with bounded requests and
+  an explicit retry notice if a translation is unavailable. Existing metadata
+  remains usable offline. Manual titles, custom descriptions, member/party
+  names, and locations are never translated or rewritten. Party translations
+  are local presentations, not edits to other members' saved movies.
+  New additions retain their language.
 - **Elegir y guardar** loads the complete movie details before selecting it and
   adding it to your collection. Only chosen movies are stored, not every search
   result. Choosing an existing TMDB movie does not duplicate it or reset its

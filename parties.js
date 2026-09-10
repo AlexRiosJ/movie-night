@@ -6,11 +6,18 @@ const PARTY_ID = /^[a-f0-9-]{36}$/;
 const party = {
   session: null, snapshot: null, revision: -1, sessions: [], activeId: null,
   localState: null, loading: false, writing: false, entering: false,
-  error: "", storageError: "", storageWritable: true, epoch: 0, timer: null, polling: false,
-  formMode: "create",
+  error: "", errorMessages: null, storageError: "", storageErrorMessages: null,
+  storageWritable: true, epoch: 0, timer: null, polling: false,
+  formMode: "create", copyStatus: null,
 };
 
-class PartyApiError extends Error {}
+class PartyApiError extends LocalizedError {}
+
+function setPartyError(spanish, english) {
+  const error = new PartyApiError(spanish, english);
+  party.error = error.message;
+  party.errorMessages = error.messages;
+}
 
 function validPartySession(value) {
   return isRecord(value) && PARTY_ID.test(value.partyId) && PARTY_ID.test(value.memberId)
@@ -20,6 +27,8 @@ function validPartySession(value) {
 
 function partyStorageError(error) {
   party.storageError = "No se pudo recordar la sesi\u00f3n en este navegador. Al cerrar podr\u00edas perder tu identidad; los datos compartidos siguen en el servidor.";
+  party.storageErrorMessages = [party.storageError,
+    "Your session could not be remembered in this browser. Closing it may lose your identity; shared data remains on the server."];
   console.error("Movie Night: party storage", error);
   renderParty();
 }
@@ -85,18 +94,21 @@ function validatePartySnapshot(snapshot, session) {
     || !snapshot.members.some((member) => member.id === session.memberId)
     || new Set(snapshot.members.map((member) => member.id)).size !== snapshot.members.length
     || !isValidState({ ...freshState(), movies: snapshot.movies, plans: snapshot.plans })) {
-    throw new PartyApiError("La party devolvi\u00f3 datos no compatibles. No se reemplaz\u00f3 tu lista.");
+    throw new PartyApiError("La party devolvi\u00f3 datos no compatibles. No se reemplaz\u00f3 tu lista.",
+      "The party returned incompatible data. Your list was not replaced.");
   }
   const authors = new Map(snapshot.members.map((member) => [member.id, member.name]));
   if (!snapshot.movies.every((movie) => authors.has(movie.addedBy) && authors.get(movie.addedBy) === movie.addedByName)
     || !snapshot.plans.every((plan) => authors.has(plan.createdBy) && authors.get(plan.createdBy) === plan.createdByName)) {
-    throw new PartyApiError("No se pudo identificar a los autores de la lista compartida.");
+    throw new PartyApiError("No se pudo identificar a los autores de la lista compartida.",
+      "Could not identify the authors of the shared list.");
   }
   return snapshot;
 }
 
 async function partyRequest(path, method = "GET", body = null, session = party.session) {
-  if (!api.baseUrl) throw new PartyApiError("Configura el Worker y su base de datos para usar parties.");
+  if (!api.baseUrl) throw new PartyApiError("Configura el Worker y su base de datos para usar parties.",
+    "Configure the Worker and its database to use parties.");
   const headers = { Accept: "application/json" };
   if (body !== null) headers["Content-Type"] = "application/json";
   if (session) headers.Authorization = `Bearer ${session.token}`;
@@ -111,21 +123,30 @@ async function partyRequest(path, method = "GET", body = null, session = party.s
     data = await response.json();
   } catch (error) {
     if (["TimeoutError", "AbortError"].includes(error.name) || error instanceof TypeError) {
-      throw new PartyApiError(method === "GET"
-        ? "No se pudo actualizar la party. Revisa tu conexi\u00f3n y reintenta."
-        : "No se pudo confirmar el cambio. Actualiza la party antes de reintentarlo: podr\u00eda haberse guardado.");
+      const messages = method === "GET"
+        ? ["No se pudo actualizar la party. Revisa tu conexi\u00f3n y reintenta.",
+          "Could not refresh the party. Check your connection and try again."]
+        : ["No se pudo confirmar el cambio. Actualiza la party antes de reintentarlo: podr\u00eda haberse guardado.",
+          "Could not confirm the change. Refresh the party before retrying: it may have been saved."];
+      throw new PartyApiError(...messages);
     }
-    if (error instanceof SyntaxError) throw new PartyApiError("El Worker no devolvi\u00f3 datos v\u00e1lidos para la party.");
+    if (error instanceof SyntaxError) throw new PartyApiError("El Worker no devolvi\u00f3 datos v\u00e1lidos para la party.",
+      "The Worker returned invalid party data.");
     throw error;
   }
-  if (!response.ok) throw new PartyApiError(isRecord(data) && isText(data.error, 500)
-    ? data.error : `No se pudo acceder a la party (HTTP ${response.status}).`);
+  if (!response.ok) {
+    if (isRecord(data) && isText(data.error, 500)) throw new PartyApiError(data.error);
+    throw new PartyApiError(`No se pudo acceder a la party (HTTP ${response.status}).`,
+      `Could not access the party (HTTP ${response.status}).`);
+  }
   return data;
 }
 
 function reportPartyError(error) {
   if (!(error instanceof PartyApiError)) console.error("Movie Night: party", error);
-  party.error = error instanceof PartyApiError ? error.message : "No se pudo completar la operaci\u00f3n de la party. Reintenta.";
+  if (error instanceof PartyApiError) setPartyError(...error.messages);
+  else setPartyError("No se pudo completar la operaci\u00f3n de la party. Reintenta.",
+    "Could not complete the party operation. Try again.");
   renderParty();
 }
 
@@ -154,6 +175,7 @@ function applyPartySnapshot(snapshot, initial = false) {
         && button.dataset.tmdbId === focused.dataset.tmdbId);
       (replacement || document.querySelector(`[data-view="${state.preferences.view}"]`))?.focus({ preventScroll: true });
     }
+    refreshSelectedLanguage();
   }
 }
 
@@ -200,6 +222,7 @@ function activateParty(session, snapshot = null) {
   party.error = "";
   party.formMode = "create";
   $("party-options").open = false;
+  party.copyStatus = null;
   $("party-copy-status").hidden = true;
   const language = catalogLanguage();
   state = { ...freshState(), theme: state.theme, colorMode: state.colorMode };
@@ -214,7 +237,8 @@ function activateParty(session, snapshot = null) {
 
 function leaveParty() {
   if (party.writing || party.entering) {
-    notify("Espera a que termine la operaci\u00f3n antes de cambiar de lista.");
+    notify(["Espera a que termine la operaci\u00f3n antes de cambiar de lista.",
+      "Wait for the operation to finish before switching lists."]);
     return;
   }
   cancelSelection();
@@ -247,7 +271,7 @@ function canDeletePartyEntry(authorId) {
 
 async function writeParty(path, method, body = null) {
   if (!party.session || sharedBusy()) {
-    notify("Espera a que la party termine de sincronizarse.");
+    notify(["Espera a que la party termine de sincronizarse.", "Wait for the party to finish syncing."]);
     return null;
   }
   const session = party.session;
@@ -278,7 +302,8 @@ function inviteFromLocation() {
   const hash = window.location.hash;
   const match = /^#party=([a-f0-9]{64})$/.exec(hash);
   if (hash.startsWith("#party=") && !match) {
-    party.error = "El enlace de invitaci\u00f3n no es v\u00e1lido. Pide un enlace completo.";
+    setPartyError("El enlace de invitaci\u00f3n no es v\u00e1lido. Pide un enlace completo.",
+      "The invitation link is invalid. Ask for a complete link.");
   }
   return match?.[1] ?? "";
 }
@@ -301,11 +326,13 @@ function tokenFromInvitation(value) {
     url = new URL(value);
   } catch (error) {
     if (!(error instanceof TypeError)) throw error;
-    throw new PartyApiError("Pega el enlace de invitaci\u00f3n completo que te compartieron.");
+    throw new PartyApiError("Pega el enlace de invitaci\u00f3n completo que te compartieron.",
+      "Paste the complete invitation link that was shared with you.");
   }
   const match = /^#party=([a-f0-9]{64})$/.exec(url.hash);
   if (!["https:", "http:"].includes(url.protocol) || url.username || url.password || !match) {
-    throw new PartyApiError("El enlace de invitaci\u00f3n no es v\u00e1lido. Pide un enlace completo.");
+    throw new PartyApiError("El enlace de invitaci\u00f3n no es v\u00e1lido. Pide un enlace completo.",
+      "The invitation link is invalid. Ask for a complete link.");
   }
   return match[1];
 }
@@ -324,7 +351,7 @@ function closePartyDialog() {
 
 function setPartyMode(mode) {
   if (sharedBusy()) {
-    notify("Espera a que termine la operaci\u00f3n de la party.");
+    notify(["Espera a que termine la operaci\u00f3n de la party.", "Wait for the party operation to finish."]);
     return;
   }
   clearPartyInvitation();
@@ -349,7 +376,8 @@ async function submitParty(event) {
   const displayName = $("party-display-name").value.trim();
   const name = $("party-name").value.trim();
   if (!displayName || (!inviteToken && !name)) {
-    party.error = "Escribe tu nombre y, si creas una party, su nombre.";
+    setPartyError("Escribe tu nombre y, si creas una party, su nombre.",
+      "Enter your name and, if creating a party, its name.");
     renderParty();
     return;
   }
@@ -369,7 +397,8 @@ async function submitParty(event) {
     const data = await partyRequest(inviteToken ? "/parties/join" : "/parties", "POST",
       inviteToken ? { inviteToken, displayName } : { name, displayName }, null);
     const session = isRecord(data) && isRecord(data.session) ? { ...data.session, apiBaseUrl: api.baseUrl } : null;
-    if (!validPartySession(session)) throw new PartyApiError("La sesi\u00f3n de la party no es compatible.");
+    if (!validPartySession(session)) throw new PartyApiError("La sesi\u00f3n de la party no es compatible.",
+      "The party session is incompatible.");
     validatePartySnapshot(data.snapshot, session);
     party.sessions = party.sessions.filter((saved) => saved.partyId !== session.partyId);
     party.sessions.push(session);
@@ -378,7 +407,8 @@ async function submitParty(event) {
     $("party-join-link").value = "";
     if (inviteToken) closePartyDialog();
     else if ($("party-dialog").open) $("party-copy").focus();
-    notify(inviteToken ? "Ya formas parte de la party." : "Party creada. Comparte el enlace para invitar.");
+    notify(inviteToken ? ["Ya formas parte de la party.", "You've joined the party."]
+      : ["Party creada. Comparte el enlace para invitar.", "Party created. Share the link to invite others."]);
   } catch (error) {
     reportPartyError(error);
   } finally {
@@ -393,42 +423,57 @@ function renderParty() {
   const current = party.snapshot;
   const member = current?.members.find((item) => item.id === party.session.memberId);
   const joining = party.formMode === "join";
-  const partyName = current?.party.name || party.session?.name || "Tu party";
-  const warning = [party.error, party.storageError].filter(Boolean).join(" ");
-  $("party-trigger-name").textContent = party.session ? partyName : "Modo personal";
-  $("party-trigger-label").textContent = party.session ? "En party" : "Movie party";
+  const partyName = current?.party.name || party.session?.name || t("Tu party", "Your party");
+  const error = party.error ? localizedText(party.errorMessages?.[0] === party.error ? party.errorMessages : party.error) : "";
+  const storageError = party.storageError
+    ? localizedText(party.storageErrorMessages?.[0] === party.storageError ? party.storageErrorMessages : party.storageError) : "";
+  const warning = [error, storageError].filter(Boolean).join(" ");
+  $("party-trigger-name").textContent = party.session ? partyName : t("Modo personal", "Personal mode");
+  $("party-trigger-label").textContent = party.session ? t("En party", "In a party") : "Movie party";
   $("party-trigger").dataset.active = String(Boolean(party.session));
-  const triggerLabel = party.session ? `Party: ${partyName}. Ver participantes y compartir enlace.`
-    : "Party: modo personal. Crear o unirme a una party.";
-  $("party-trigger").setAttribute("aria-label", triggerLabel + (warning ? " Hay un aviso pendiente." : ""));
+  const triggerLabel = party.session
+    ? t(`Party: ${partyName}. Ver participantes y compartir enlace.`, `Party: ${partyName}. View participants and share the link.`)
+    : t("Party: modo personal. Crear o unirme a una party.", "Party: personal mode. Create or join a party.");
+  $("party-trigger").setAttribute("aria-label", triggerLabel + (warning
+    ? t(" Hay un aviso pendiente.", " There is a pending notice.") : ""));
   $("party-trigger").title = triggerLabel;
   $("party-trigger-warning").hidden = !warning;
   $("party-notice").textContent = warning;
   $("party-notice").hidden = !warning || $("party-dialog").open;
-  $("party-title").textContent = party.session ? partyName : "Mejor con tu gente.";
-  $("party-dialog-label").textContent = party.session ? "TU PARTY" : "MOVIE NIGHTS, EN COMPA\u00d1\u00cdA";
+  $("party-title").textContent = party.session ? partyName : t("Mejor con tu gente.", "Better with your people.");
+  $("party-dialog-label").textContent = party.session ? t("TU PARTY", "YOUR PARTY")
+    : t("MOVIE NIGHTS, EN COMPA\u00d1\u00cdA", "MOVIE NIGHTS, TOGETHER");
   $("party-identity").textContent = member
-    ? `Participas como ${member.name}${member.role === "host" ? " (anfitri\u00f3n)" : ""}.`
-    : party.session ? "Esperando la lista compartida." : "Una lista y un plan para todo el grupo. Tu colecci\u00f3n personal sigue siendo solo tuya.";
+    ? t(`Participas como ${member.name}${member.role === "host" ? " (anfitri\u00f3n)" : ""}.`,
+      `Joined as ${member.name}${member.role === "host" ? " (host)" : ""}.`)
+    : party.session ? t("Esperando la lista compartida.", "Waiting for the shared list.")
+      : t("Una lista y un plan para todo el grupo. Tu colecci\u00f3n personal sigue siendo solo tuya.",
+        "One list and one plan for the whole group. Your personal collection remains yours alone.");
   $("party-current").hidden = !party.session;
-  $("party-members").textContent = current ? `Participantes: ${current.members.map((item) => item.name).join(", ")}` : "";
-  $("party-status").textContent = party.error || (party.writing ? "Guardando en la party\u2026"
-    : party.entering ? "Preparando tu sesi\u00f3n\u2026" : party.loading ? "Cargando la party\u2026"
-    : current ? "Lista compartida. Actualizaci\u00f3n autom\u00e1tica cada 5 segundos." : "");
+  const names = current?.members.map((item) => item.name).join(", ");
+  $("party-members").textContent = current ? t(`Participantes: ${names}`, `Participants: ${names}`) : "";
+  $("party-status").textContent = error || (party.writing ? t("Guardando en la party\u2026", "Saving to the party\u2026")
+    : party.entering ? t("Preparando tu sesi\u00f3n\u2026", "Preparing your session\u2026")
+      : party.loading ? t("Cargando la party\u2026", "Loading the party\u2026")
+        : current ? t("Lista compartida. Actualizaci\u00f3n autom\u00e1tica cada 5 segundos.",
+          "Shared list. Updates automatically every 5 seconds.") : "");
   $("party-status").setAttribute("role", party.error ? "alert" : "status");
   $("party-status").hidden = !$("party-status").textContent;
-  $("party-storage-notice").textContent = party.storageError;
+  $("party-storage-notice").textContent = storageError;
   $("party-storage-notice").hidden = !party.storageError;
+  $("party-copy-status").textContent = party.copyStatus ? localizedText(party.copyStatus) : "";
   $("party-invite").hidden = !party.session;
   if (party.session) $("party-link").value = invitationUrl(party.session.inviteToken);
   $("party-leave").hidden = !party.session && !window.location.hash.startsWith("#party=");
   $("party-leave").disabled = party.writing || party.entering;
   $("party-refresh").hidden = !party.session;
   $("party-refresh").disabled = party.writing || party.entering;
-  $("party-refresh").textContent = party.error ? "Reintentar conexi\u00f3n" : "Actualizar ahora";
+  $("party-refresh").textContent = party.error ? t("Reintentar conexi\u00f3n", "Retry connection")
+    : t("Actualizar ahora", "Refresh now");
   $("party-setup-notice").hidden = Boolean(api.baseUrl);
   $("party-create").disabled = sharedBusy() || !api.baseUrl;
-  $("party-create").textContent = party.entering ? "Conectando\u2026" : joining ? "Unirme a la party" : "Crear party";
+  $("party-create").textContent = party.entering ? t("Conectando\u2026", "Connecting\u2026")
+    : joining ? t("Unirme a la party", "Join party") : t("Crear party", "Create party");
   $("party-form").setAttribute("aria-busy", String(party.entering));
   $("party-name-field").hidden = joining;
   $("party-name").required = !joining;
@@ -444,8 +489,10 @@ function renderParty() {
   $("party-options-summary").hidden = !party.session;
   if (!party.session) $("party-options").open = true;
   $("party-form-help").textContent = joining
-    ? "Pega la invitaci\u00f3n y escribe tu nombre para entrar a la lista del grupo."
-    : "Crea una lista nueva para tu grupo. Tu colecci\u00f3n personal no se subir\u00e1.";
+    ? t("Pega la invitaci\u00f3n y escribe tu nombre para entrar a la lista del grupo.",
+      "Paste the invitation and enter your name to join the group's list.")
+    : t("Crea una lista nueva para tu grupo. Tu colecci\u00f3n personal no se subir\u00e1.",
+      "Create a new list for your group. Your personal collection will not be uploaded.");
   $("party-resume").hidden = !party.sessions.some((saved) => saved.partyId !== party.session?.partyId);
   const select = $("party-sessions");
   const previous = select.value;
@@ -463,14 +510,18 @@ function renderParty() {
   document.querySelectorAll(".watch-toggle, .delete-movie, .complete-plan, .delete-plan, .choose-catalog-movie").forEach((button) => {
     button.disabled = sharedBusy();
   });
-  $("collection-label").textContent = party.session ? "Colecci\u00f3n del grupo" : "Mi colecci\u00f3n";
-  $("nights-label").textContent = party.session ? "Noches del grupo" : "Mis noches";
-  $("collection-heading").textContent = party.session ? "Colecci\u00f3n del grupo" : "Mi colecci\u00f3n";
-  $("nights-heading").textContent = party.session ? "Noches del grupo" : "Mis noches";
-  $("collection-source-label").textContent = party.session ? "Colecci\u00f3n del grupo" : "Mi colecci\u00f3n";
+  const collectionLabel = party.session ? t("Colecci\u00f3n del grupo", "Group collection") : t("Mi colecci\u00f3n", "My collection");
+  const nightsLabel = party.session ? t("Noches del grupo", "Group nights") : t("Mis noches", "My nights");
+  $("collection-label").textContent = collectionLabel;
+  $("nights-label").textContent = nightsLabel;
+  $("collection-heading").textContent = collectionLabel;
+  $("nights-heading").textContent = nightsLabel;
+  $("collection-source-label").textContent = collectionLabel;
   $("catalog-help").textContent = party.session
-    ? "Busca un t\u00edtulo o descubre por g\u00e9nero. Elegir y guardar a\u00f1ade la pel\u00edcula a la lista compartida con tu nombre."
-    : "Sin t\u00edtulo, descubre pel\u00edculas populares por g\u00e9nero. La b\u00fasqueda por t\u00edtulo incluye todos los g\u00e9neros. Elegir una peli la guarda en tu colecci\u00f3n.";
+    ? t("Busca un t\u00edtulo o descubre por g\u00e9nero. Elegir y guardar a\u00f1ade la pel\u00edcula a la lista compartida con tu nombre.",
+      "Search by title or discover by genre. Choosing and saving adds the movie to the shared list with your name.")
+    : t("Sin t\u00edtulo, descubre pel\u00edculas populares por g\u00e9nero. La b\u00fasqueda por t\u00edtulo incluye todos los g\u00e9neros. Elegir una peli la guarda en tu colecci\u00f3n.",
+      "Leave the title empty to discover popular movies by genre. Title searches include all genres. Choosing a movie saves it to your collection.");
 }
 
 async function followPartyInvitation() {
@@ -537,18 +588,22 @@ async function initializeParties() {
   $("party-copy").addEventListener("click", async () => {
     try {
       await navigator.clipboard.writeText($("party-link").value);
-      $("party-copy-status").textContent = "Enlace copiado. Ya puedes compartirlo con tu grupo.";
+      party.copyStatus = ["Enlace copiado. Ya puedes compartirlo con tu grupo.",
+        "Link copied. You can now share it with your group."];
     } catch (error) {
       console.error("Movie Night: copy invitation", error);
       $("party-link").focus();
       $("party-link").select();
-      $("party-copy-status").textContent = "No se pudo copiar autom\u00e1ticamente. Copia el enlace seleccionado.";
+      party.copyStatus = ["No se pudo copiar autom\u00e1ticamente. Copia el enlace seleccionado.",
+        "Could not copy automatically. Copy the selected link."];
     }
+    $("party-copy-status").textContent = localizedText(party.copyStatus);
     $("party-copy-status").hidden = false;
   });
   window.addEventListener("hashchange", () => {
     if (sharedBusy()) {
-      party.error = "Espera a que termine la operaci\u00f3n y vuelve a abrir la invitaci\u00f3n.";
+      setPartyError("Espera a que termine la operaci\u00f3n y vuelve a abrir la invitaci\u00f3n.",
+        "Wait for the operation to finish, then reopen the invitation.");
       renderParty();
       return;
     }

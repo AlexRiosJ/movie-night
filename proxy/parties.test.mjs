@@ -46,6 +46,7 @@ const tmdb = (overrides = {}) => ({
   id: "tmdb-42", tmdbId: 42, title: "Del cat\u00e1logo", genre: "sci-fi", year: 2024, minutes: 123,
   description: "Sinopsis\ncon varias l\u00edneas.", watched: false, custom: false, posterPath: "/poster.jpg",
   cast: ["Actor"], directors: ["Directora"], genres: ["Ciencia ficci\u00f3n"], originalTitle: "Original",
+  castProfiles: [{ name: "Actor", profilePath: "/actor.jpg" }], voteCount: 1200,
   rating: 8.5, ...overrides,
 });
 const plan = (movieId, overrides = {}) => ({
@@ -152,6 +153,8 @@ test("movies retain original attribution/content and watched status on retries; 
   assert.equal(first.movies[0].addedByName, "Bea");
   assert.equal(first.movies[0].extra, undefined);
   assert.equal(first.movies[0].role, undefined);
+  assert.deepEqual(first.movies[0].castProfiles, movie.castProfiles);
+  assert.equal(first.movies[0].voteCount, 1200);
   await send(db, host, "/movies/tmdb-42", { method: "PATCH", body: { watched: true } });
   const repeated = await addMovie(db, host, tmdb({ title: "Sobrescribir", watched: false }));
   assert.equal(repeated.movies.length, 1);
@@ -317,6 +320,10 @@ test("movie and plan payloads enforce frontend maxima, canonical IDs, known valu
     { genres: Array(21).fill("A") }, { genres: ["A".repeat(81)] }, { originalTitle: "T".repeat(301) },
     { rating: 11 }, { rating: -1 }, { rating: "8" }, { posterPath: "https://evil.example/poster.jpg" },
     { posterPath: "//evil.example/poster.jpg" }, { posterPath: "/poster.svg" }, { cast: null },
+    { castProfiles: null }, { castProfiles: Array(13).fill({ name: "Actor", profilePath: null }) },
+    { castProfiles: [{ name: "", profilePath: null }] },
+    { castProfiles: [{ name: "Actor", profilePath: "//evil.example/photo.jpg" }] },
+    { voteCount: -1 }, { voteCount: 1.5 }, { voteCount: Number.MAX_SAFE_INTEGER + 1 },
   ]) {
     const result = await send(db, host, "/movies", { method: "POST", body: { movie: tmdb(overrides) } });
     assert.equal(result.status, 400, JSON.stringify(overrides));

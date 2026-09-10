@@ -3,14 +3,12 @@
   "main": "worker.mjs",
   "compatibility_date": "2026-09-09",
   "workers_dev": true,
-  // Optional shared parties. Create D1 first, then uncomment this binding and
-  // replace the placeholder with the actual database_id returned by Wrangler.
-  // "d1_databases": [{
-  //   "binding": "PARTY_DB",
-  //   "database_name": "movie-night-parties",
-  //   "database_id": "REPLACE_WITH_ACTUAL_DATABASE_ID",
-  //   "migrations_dir": "migrations"
-  // }],
+  "d1_databases": [{
+    "binding": "PARTY_DB",
+    "database_name": "movie-night-parties",
+    "database_id": "ef2ac4da-13eb-4b82-a273-9a7944a09da3",
+    "migrations_dir": "migrations"
+  }],
   "vars": {
     "ALLOWED_ORIGINS": "https://alexriosj.github.io"
   }

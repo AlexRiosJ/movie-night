@@ -103,10 +103,10 @@ From the repository root, after signing in to Cloudflare:
    npx wrangler d1 create movie-night-parties --config proxy\wrangler.jsonc
    ```
 
-2. In `proxy/wrangler.jsonc`, uncomment the `d1_databases` example. Keep
-   `"binding": "PARTY_DB"`, use the database's actual name, and replace
-   `REPLACE_WITH_ACTUAL_DATABASE_ID` with the **real `database_id` returned by
-   Wrangler**. The checked-in placeholder is not a deployable database ID.
+2. In `proxy/wrangler.jsonc`, keep `"binding": "PARTY_DB"` and set the database's
+   actual name and **`database_id` returned by Wrangler**. The checked-in binding
+   identifies this app's production database; replace it when deploying in another
+   Cloudflare account. A database ID is a public identifier, not a credential.
    Keep `"migrations_dir": "migrations"`; it is relative to the proxy configuration.
 3. Apply the schema to the remote database, then deploy the Worker:
 
@@ -220,10 +220,17 @@ under a custom domain; update the Worker origin allowlist when changing domains.
   result. Choosing an existing TMDB movie does not duplicate it or reset its
   watched status.
 - Movie details include title, release year, runtime, synopsis, poster, up to
-  12 principal cast members, directors, genres, original title, and TMDB rating.
+  12 principal cast members with portraits in a horizontally scrollable row,
+  directors, genres, and original title. A prominent user score shows TMDB's
+  average rating as a percentage (rounded to the nearest whole percent), with
+  the number of votes. Movies without a rating say so rather than showing 0%.
   Data is requested in Spanish; translations and some metadata may be missing.
+  Missing or broken cast portraits show "Sin foto" while keeping the actor's name.
   Missing fields have explicit placeholders, and missing/broken posters use the
   original theme illustration (or a compact posterless layout on small screens).
+- The random-pick button sits above the movie details in a sticky control bar,
+  so changing the title or synopsis length does not move it. It stays visible
+  while scrolling through the planner, with a full-width button on small screens.
 - **Elegir pelicula aleatoria** uses TMDB by default when configured. It samples
   different discovery pages, avoids the current movie, and respects your universe
   and watched filter. Discovery includes released movies with at least 50 votes,
@@ -271,6 +278,10 @@ Existing collections and plans are preserved; the new catalog does not reset or
 automatically replace them. A legacy entry with the same title and release year
 can receive TMDB details while keeping its ID, watched status, and plan references.
 Custom movies are not guessed or automatically matched to an ambiguous API result.
+Saved TMDB entries without cast portraits or vote counts remain usable offline.
+Choosing one again from **Explorar** refreshes its details without changing its
+watched status or plan references. Deploy the updated Worker as well as the
+frontend to enable portraits and vote counts.
 
 Local collections and plans are not uploaded, including when you create or join a
 party: there is **no implicit upload of a legacy collection**. Party mode uses a
@@ -301,8 +312,8 @@ shared until you explicitly save a plan. Party lists require a working Worker
 connection; failed saves are not silently converted into local-only changes.
 
 Search terms, universe filters, page numbers, and selected TMDB IDs go through the
-configured Worker to TMDB. Posters
-load directly from TMDB's image CDN, and the attribution logo loads from TMDB.
+configured Worker to TMDB. Posters and cast portraits load directly from TMDB's
+image CDN, and the attribution logo loads from TMDB.
 These services receive normal network information such as IP addresses. There
 are no third-party fonts or analytics in the app.
 
@@ -316,7 +327,7 @@ collection data is preserved without overwriting it, and local persistence is di
 To recover, back up the raw value, remove only `movie-night:v1`, and reload.
 
 Locally saved metadata works without contacting the API, but party synchronization
-and posters still need a network connection. This is not an installable/offline PWA.
+and posters/cast portraits still need a network connection. This is not an installable/offline PWA.
 
 ## Development checks
 

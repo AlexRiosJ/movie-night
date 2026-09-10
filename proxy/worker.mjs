@@ -54,6 +54,10 @@ function names(items, limit, length) {
   return [...unique];
 }
 
+function imagePath(value) {
+  return typeof value === "string" && /^\/[a-zA-Z0-9_-]+\.(jpg|png)$/i.test(value) ? value : null;
+}
+
 function movieMood(genreIds, keywords) {
   if (keywords.some((keyword) => keyword.id === CHRISTMAS_KEYWORD)) return "christmas";
   if (genreIds.includes(878)) return "sci-fi";
@@ -73,14 +77,14 @@ export function normalizeMovie(data, mood = null) {
   if (!genreIds.every(positiveId)) throw invalidUpstream();
   const credits = optionalRecord(data.credits);
   const cast = optionalArray(credits.cast);
+  const principalCast = names(cast, 12, 120);
   const crew = optionalArray(credits.crew);
   if (crew.some((person) => !isRecord(person))) throw invalidUpstream();
   const keywords = optionalArray(optionalRecord(data.keywords).keywords);
   if (keywords.some((keyword) => !isRecord(keyword) || !positiveId(keyword.id))) throw invalidUpstream();
   const year = typeof data.release_date === "string" && /^\d{4}-\d{2}-\d{2}$/.test(data.release_date)
     ? Number(data.release_date.slice(0, 4)) : null;
-  const posterPath = typeof data.poster_path === "string" && /^\/[a-zA-Z0-9_-]+\.(jpg|png)$/i.test(data.poster_path)
-    ? data.poster_path : null;
+  const voteCount = Number.isSafeInteger(data.vote_count) && data.vote_count >= 0 ? data.vote_count : null;
   return {
     id: `tmdb-${data.id}`,
     tmdbId: data.id,
@@ -89,13 +93,18 @@ export function normalizeMovie(data, mood = null) {
     year: year >= 1888 && year <= 2200 ? year : null,
     minutes: Number.isInteger(data.runtime) && data.runtime > 0 && data.runtime <= 1000 ? data.runtime : null,
     description: text(data.overview, 6000) || "Sin sinopsis disponible.",
-    posterPath,
-    cast: names(cast, 12, 120),
+    posterPath: imagePath(data.poster_path),
+    cast: principalCast,
+    castProfiles: principalCast.map((name) => ({
+      name,
+      profilePath: imagePath(cast.find((person) => text(person.name, 120) === name).profile_path),
+    })),
     directors: names(crew.filter((person) => person.job === "Director"), 6, 120),
     genres: genres.length ? names(genres, 20, 80) : [...new Set(genreIds.map((id) => GENRE_NAMES[id]).filter(Boolean))].slice(0, 20),
     originalTitle: text(data.original_title, 300),
+    voteCount,
     rating: Number.isFinite(data.vote_average) && data.vote_average >= 0 && data.vote_average <= 10
-      && data.vote_count > 0 ? data.vote_average : null,
+      && voteCount > 0 ? data.vote_average : null,
   };
 }
 

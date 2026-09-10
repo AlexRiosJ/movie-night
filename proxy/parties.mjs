@@ -36,6 +36,10 @@ function stringList(value, count, length) {
   return value.map((item) => text(item, length));
 }
 
+function isImagePath(value) {
+  return value === null || (typeof value === "string" && /^\/[a-zA-Z0-9_-]+\.(jpg|png)$/i.test(value));
+}
+
 function movieId(value) {
   if (typeof value !== "string") invalid("El identificador de pel\u00edcula no es v\u00e1lido.");
   if (UUID.test(value)) return value;
@@ -66,8 +70,7 @@ function validateMovie(value) {
     movie.title = movie.title.replace(/\s+/gu, " ");
   } else {
     if (!Number.isSafeInteger(value.tmdbId) || value.tmdbId <= 0 || id !== `tmdb-${value.tmdbId}`
-      || !(value.posterPath === null || (typeof value.posterPath === "string"
-        && /^\/[a-zA-Z0-9_-]+\.(jpg|png)$/i.test(value.posterPath)))
+      || !isImagePath(value.posterPath)
       || !(value.rating === null || (Number.isFinite(value.rating) && value.rating >= 0 && value.rating <= 10))) invalid();
     Object.assign(movie, {
       tmdbId: value.tmdbId, posterPath: value.posterPath,
@@ -75,6 +78,17 @@ function validateMovie(value) {
       genres: stringList(value.genres, 20, 80), originalTitle: text(value.originalTitle, 300, { empty: true }),
       rating: value.rating,
     });
+    if (value.castProfiles !== undefined) {
+      if (!Array.isArray(value.castProfiles) || value.castProfiles.length > 12) invalid();
+      movie.castProfiles = value.castProfiles.map((person) => {
+        if (!isRecord(person) || !isImagePath(person.profilePath)) invalid();
+        return { name: text(person.name, 120), profilePath: person.profilePath };
+      });
+    }
+    if (value.voteCount !== undefined) {
+      if (value.voteCount !== null && (!Number.isSafeInteger(value.voteCount) || value.voteCount < 0)) invalid();
+      movie.voteCount = value.voteCount;
+    }
   }
   return movie;
 }

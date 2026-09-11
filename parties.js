@@ -8,7 +8,7 @@ const party = {
   localState: null, loading: false, writing: false, entering: false,
   error: "", errorMessages: null, storageError: "", storageErrorMessages: null,
   storageWritable: true, epoch: 0, timer: null, polling: false,
-  formMode: "create", copyStatus: null,
+  formMode: "create", copyStatus: null, surpriseSubmission: null, surpriseStatus: null,
 };
 
 class PartyApiError extends LocalizedError {}
@@ -103,7 +103,21 @@ function validatePartySnapshot(snapshot, session) {
     throw new PartyApiError("No se pudo identificar a los autores de la lista compartida.",
       "Could not identify the authors of the shared list.");
   }
+  if (snapshot.surprise !== undefined && !validPartySurprise(snapshot.surprise)) {
+    throw new PartyApiError("La party devolvi\u00f3 datos de sorpresa no compatibles.",
+      "The party returned incompatible surprise data.");
+  }
   return snapshot;
+}
+
+function validPartySurprise(value) {
+  const timestamp = (date) => typeof date === "string" && Number.isFinite(Date.parse(date));
+  return isRecord(value) && Number.isInteger(value.pendingCount) && value.pendingCount >= 0
+    && value.pendingCount <= 200 && Array.isArray(value.history) && value.history.length <= 200
+    && value.history.every((movie) => isRecord(movie) && isText(movie.title, 120)
+      && (movie.year === null || (Number.isInteger(movie.year) && movie.year >= 1888 && movie.year <= 2200))
+      && timestamp(movie.revealedAt))
+    && (value.nextRevealAt === null || timestamp(value.nextRevealAt));
 }
 
 async function partyRequest(path, method = "GET", body = null, session = party.session) {
@@ -223,6 +237,7 @@ function activateParty(session, snapshot = null) {
   party.formMode = "create";
   $("party-options").open = false;
   party.copyStatus = null;
+  clearSurpriseDraft();
   $("party-copy-status").hidden = true;
   const language = catalogLanguage();
   state = { ...freshState(), theme: state.theme, colorMode: state.colorMode };
@@ -248,6 +263,7 @@ function leaveParty() {
     state = party.localState;
   }
   party.epoch += 1;
+  clearSurpriseDraft();
   Object.assign(party, {
     session: null, snapshot: null, activeId: null, localState: null,
     revision: -1, loading: false, polling: false, error: "", formMode: "create",
@@ -419,6 +435,83 @@ async function submitParty(event) {
   }
 }
 
+function clearSurpriseDraft() {
+  party.surpriseSubmission = null;
+  party.surpriseStatus = null;
+  $("party-surprise-title").value = "";
+  $("party-surprise-year").value = "";
+  setValidationMessage($("party-surprise-title"));
+  setValidationMessage($("party-surprise-year"));
+}
+
+async function submitPartySurprise(event) {
+  event.preventDefault();
+  if (sharedBusy() || !party.snapshot?.surprise || !$("party-surprise-form").reportValidity()) return;
+  const title = $("party-surprise-title").value.trim().replace(/\s+/gu, " ");
+  const yearValue = $("party-surprise-year").value.trim();
+  const year = yearValue ? Number(yearValue) : null;
+  if (!title || title.length > 120 || (year !== null && (!Number.isInteger(year) || year < 1888 || year > 2200))) {
+    notify(["Escribe un t\u00edtulo y un a\u00f1o v\u00e1lidos para la sorpresa.",
+      "Enter a valid title and year for the surprise."]);
+    return;
+  }
+  const previous = party.surpriseSubmission;
+  const submission = previous?.title === title && previous.year === year ? previous : {
+    id: crypto.randomUUID(), title, year,
+  };
+  party.surpriseSubmission = submission;
+  party.surpriseStatus = null;
+  if (!await writeParty("/surprises", "POST", submission)) return;
+  clearSurpriseDraft();
+  party.surpriseStatus = ["Propuesta recibida de forma an\u00f3nima. Si el t\u00edtulo y a\u00f1o ya estaban, no se duplican.",
+    "Proposal received anonymously. If the title and year were already submitted, they are not duplicated."];
+  renderPartySurprises();
+}
+
+async function revealPartySurprise() {
+  if (sharedBusy() || !party.snapshot?.surprise || !party.snapshot.members.some(
+    (member) => member.id === party.session.memberId && member.role === "host")) return;
+  if (!window.confirm(t("\u00bfYa est\u00e1n reunidos? Se revelar\u00e1 una pel\u00edcula para todos y no habr\u00e1 otro sorteo durante 7 d\u00edas.",
+    "Is everyone together? One movie will be revealed to everyone, with no further draw for 7 days."))) return;
+  await writeParty("/surprises/reveal", "POST", {});
+}
+
+function renderPartySurprises() {
+  const surprise = party.snapshot?.surprise;
+  const supported = Boolean(surprise);
+  $("party-surprises").hidden = !party.session;
+  $("party-surprise-form").hidden = !supported;
+  $("party-surprise-count").textContent = surprise
+    ? t(`${surprise.pendingCount} pel\u00edculas ocultas pendientes.`, `${surprise.pendingCount} hidden movies pending.`)
+    : t("Las noches sorpresa requieren actualizar el Worker y su base de datos.",
+      "Surprise nights require updating the Worker and its database.");
+  $("party-surprise-status").hidden = !party.surpriseStatus;
+  $("party-surprise-status").textContent = party.surpriseStatus ? localizedText(party.surpriseStatus) : "";
+  const busy = sharedBusy();
+  for (const id of ["party-surprise-title", "party-surprise-year", "party-surprise-submit"]) {
+    $(id).disabled = busy || !supported;
+  }
+  $("party-surprise-form").setAttribute("aria-busy", String(party.writing));
+  const host = party.snapshot?.members.some((member) => member.id === party.session?.memberId && member.role === "host");
+  const next = surprise?.nextRevealAt;
+  const waiting = next && Date.parse(next) > Date.now();
+  $("party-surprise-reveal").hidden = !supported || !host;
+  $("party-surprise-reveal").disabled = busy || !surprise?.pendingCount || Boolean(waiting);
+  $("party-surprise-next").textContent = waiting
+    ? t(`Pr\u00f3ximo sorteo disponible: ${new Date(next).toLocaleString("es-ES")}.`,
+      `Next draw available: ${new Date(next).toLocaleString("en-US")}.`)
+    : supported ? t("El anfitri\u00f3n puede revelar una pel\u00edcula cuando se re\u00fanan.",
+      "The host can reveal a movie when you meet.") : "";
+  const history = document.createDocumentFragment();
+  for (const movie of surprise?.history ?? []) {
+    const item = document.createElement("li");
+    const date = new Date(movie.revealedAt).toLocaleDateString(catalogLanguage());
+    item.textContent = `${movie.title}${movie.year === null ? "" : ` (${movie.year})`} \u2014 ${date}`;
+    history.append(item);
+  }
+  $("party-surprise-history").replaceChildren(history);
+}
+
 function renderParty() {
   const current = party.snapshot;
   const member = current?.members.find((item) => item.id === party.session.memberId);
@@ -518,10 +611,11 @@ function renderParty() {
   $("nights-heading").textContent = nightsLabel;
   $("collection-source-label").textContent = collectionLabel;
   $("catalog-help").textContent = party.session
-    ? t("Busca un t\u00edtulo o descubre por g\u00e9nero. Elegir y guardar a\u00f1ade la pel\u00edcula a la lista compartida con tu nombre.",
-      "Search by title or discover by genre. Choosing and saving adds the movie to the shared list with your name.")
+    ? t("Busca un t\u00edtulo o descubre por g\u00e9nero. Elegir y guardar a\u00f1ade la pel\u00edcula a la lista compartida con tu nombre. Para propuestas ocultas, abre la party y usa Noches sorpresa.",
+      "Search by title or discover by genre. Choosing and saving adds the movie to the shared list with your name. For hidden proposals, open the party and use Surprise movie nights.")
     : t("Sin t\u00edtulo, descubre pel\u00edculas populares por g\u00e9nero. La b\u00fasqueda por t\u00edtulo incluye todos los g\u00e9neros. Elegir una peli la guarda en tu colecci\u00f3n.",
       "Leave the title empty to discover popular movies by genre. Title searches include all genres. Choosing a movie saves it to your collection.");
+  renderPartySurprises();
 }
 
 async function followPartyInvitation() {
@@ -574,6 +668,8 @@ async function initializeParties() {
   $("party-mode-create").addEventListener("click", () => setPartyMode("create"));
   $("party-mode-join").addEventListener("click", () => setPartyMode("join"));
   $("party-form").addEventListener("submit", submitParty);
+  $("party-surprise-form").addEventListener("submit", submitPartySurprise);
+  $("party-surprise-reveal").addEventListener("click", revealPartySurprise);
   $("party-leave").addEventListener("click", leaveParty);
   $("party-refresh").addEventListener("click", refreshParty);
   $("party-resume-button").addEventListener("click", async () => {

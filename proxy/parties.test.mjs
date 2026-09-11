@@ -57,6 +57,26 @@ const plan = (movieId, overrides = {}) => ({
 const path = (session, suffix = "") => `/parties/${session.partyId}${suffix}`;
 const send = (db, session, suffix = "", options = {}) =>
   api(db, path(session, suffix), { token: session.token, ...options });
+const secretMovie = (overrides = {}) => ({ id: randomUUID(), title: "La sorpresa oculta", year: null, ...overrides });
+const submitSurprise = (db, session, body) => send(db, session, "/surprises", { method: "POST", body });
+const revealSurprise = (db, session, body = {}) => send(db, session, "/surprises/reveal", { method: "POST", body });
+const WEEK = 7 * 24 * 60 * 60 * 1000;
+
+function assertSurprisePrivacy(snapshot, secrets, pendingCount, revealed = []) {
+  assert.deepEqual(Object.keys(snapshot.surprise).sort(), ["history", "nextRevealAt", "pendingCount"]);
+  assert.equal(snapshot.surprise.pendingCount, pendingCount);
+  assert.equal(snapshot.surprise.history.length, revealed.length);
+  const serialized = JSON.stringify(snapshot);
+  for (const secret of secrets) {
+    assert.equal(serialized.includes(secret.id), false, "secret identifiers never leave storage");
+    if (!revealed.includes(secret.title)) assert.equal(serialized.includes(secret.title), false, "pending title remains hidden");
+  }
+  for (const entry of snapshot.surprise.history) {
+    assert.deepEqual(Object.keys(entry).sort(), ["revealedAt", "title", "year"]);
+    assert.ok(revealed.includes(entry.title));
+    assert.equal(new Date(entry.revealedAt).toISOString(), entry.revealedAt);
+  }
+}
 
 async function addMovie(db, session, movie = custom()) {
   const result = await send(db, session, "/movies", { method: "POST", body: { movie } });
@@ -106,7 +126,7 @@ test("create/join generate identities, hash credentials, retain duplicate displa
   for (const column of ["token", "token_hash", "invite_hash", "inviteToken"]) assert.equal(serialized.includes(`"${column}"`), false);
   assert.equal(JSON.stringify([savedParty, savedMembers]).includes(created.session.token), false);
   assert.ok(db.sessions.every((constraint) => constraint === "first-primary"));
-  assert.equal(db.batches.at(-1).length, 4);
+  assert.equal(db.batches.at(-1).length, 6);
 });
 
 test("every private route checks bearer membership in the exact party; invitation and spoofed roles are not authorization", async (t) => {
@@ -123,6 +143,8 @@ test("every private route checks bearer membership in the exact party; invitatio
     [`/movies/${movie.id}`, "DELETE", undefined],
     ["/plans", "POST", { plan: plan(movie.id) }],
     [`/plans/${value.id}`, "PATCH", { completed: true }], [`/plans/${value.id}`, "DELETE", undefined],
+    ["/surprises", "POST", { id: randomUUID(), title: "Secreta", year: null }],
+    ["/surprises/reveal", "POST", {}],
   ];
   const initial = (await send(db, host)).data;
   for (const token of [undefined, "short", "a".repeat(10000), "f".repeat(64), host.inviteToken, other.token]) {
@@ -252,6 +274,7 @@ test("movie deletion and every dependent night roll back together if the databas
 test("movie deletion migration preserves an existing party and enables removal of its saved nights", async (t) => {
   const db = database(t, false);
   db.sqlite.exec(readFileSync(new URL("./migrations/0001_parties.sql", import.meta.url), "utf8"));
+  db.sqlite.exec(readFileSync(new URL("./migrations/0003_party_surprises.sql", import.meta.url), "utf8"));
   const host = (await create(db)).session;
   const movie = custom();
   await addMovie(db, host, movie);
@@ -263,6 +286,286 @@ test("movie deletion migration preserves an existing party and enables removal o
   assert.deepEqual(deleted.data.movies, []);
   assert.deepEqual(deleted.data.plans, []);
   assert.equal(deleted.data.revision, before.revision + 2);
+});
+
+test("surprise submissions stay anonymous and hidden on every snapshot path, including host and ordinary mutations", async (t) => {
+  const db = database(t);
+  const created = await create(db);
+  assert.deepEqual(created.snapshot.surprise, { pendingCount: 0, history: [], nextRevealAt: null });
+  const host = created.session;
+  const member = (await join(db, host.inviteToken)).session;
+  const secrets = [secretMovie(), secretMovie({ title: "Otra sorpresa desconocida", year: 1999 })];
+  assertSurprisePrivacy((await submitSurprise(db, member, secrets[0])).data, secrets, 1);
+  const submitted = await submitSurprise(db, host, secrets[1]);
+  assert.equal(submitted.status, 200);
+  assertSurprisePrivacy(submitted.data, secrets, 2);
+  assert.equal(submitted.headers.get("Cache-Control"), "no-store");
+  assertSurprisePrivacy((await join(db, host.inviteToken, "Tercero")).snapshot, secrets, 2);
+  assertSurprisePrivacy((await create(db, "Otra")).snapshot, secrets, 0);
+  const movie = custom({ title: "Visible" });
+  const scheduled = plan(movie.id);
+  const snapshots = [
+    (await send(db, host)).data, (await send(db, member)).data,
+    await addMovie(db, host, movie), await addPlan(db, member, scheduled),
+    (await send(db, member, `/movies/${movie.id}`, { method: "PATCH", body: { watched: true } })).data,
+    (await send(db, host, `/plans/${scheduled.id}`, { method: "PATCH", body: { completed: true } })).data,
+    (await send(db, member, `/plans/${scheduled.id}`, { method: "DELETE" })).data,
+    (await send(db, host, `/movies/${movie.id}`, { method: "DELETE" })).data,
+    (await submitSurprise(db, member, secrets[0])).data,
+  ];
+  for (const snapshot of snapshots) assertSurprisePrivacy(snapshot, secrets, 2);
+  assert.deepEqual(db.sqlite.prepare("PRAGMA table_info(party_surprises)").all().map((column) => column.name),
+    ["party_id", "id", "title", "title_key", "year", "revealed_at"]);
+  assert.deepEqual(db.sqlite.prepare("PRAGMA foreign_key_list(party_surprises)").all().map((key) => key.table), ["parties"]);
+  const stored = JSON.stringify(db.sqlite.prepare("SELECT * FROM party_surprises").all());
+  for (const session of [host, member]) {
+    for (const privateValue of [session.memberId, session.token, digest(session.token)]) {
+      assert.equal(stored.includes(privateValue), false);
+    }
+  }
+  const result = await revealSurprise(db, host);
+  assert.equal(result.status, 200);
+  const revealed = result.data.surprise.history.map((entry) => entry.title);
+  assertSurprisePrivacy(result.data, secrets, 1, revealed);
+  for (const snapshot of [
+    (await send(db, host)).data, (await send(db, member)).data,
+    (await join(db, host.inviteToken)).snapshot,
+    await addMovie(db, member, movie), await addPlan(db, host, scheduled),
+    (await submitSurprise(db, member, secrets[0])).data,
+    (await revealSurprise(db, host)).data,
+  ]) assertSurprisePrivacy(snapshot, secrets, 1, revealed);
+});
+
+test("surprise routes reject guessed access, invalid input, foreign sessions and member reveals", async (t) => {
+  const db = database(t);
+  const host = (await create(db)).session;
+  const member = (await join(db, host.inviteToken)).session;
+  const foreign = (await create(db, "Foreign")).session;
+  const entry = secretMovie();
+  const initial = (await submitSurprise(db, member, entry)).data;
+  assert.equal((await revealSurprise(db, member)).status, 403);
+  assert.equal((await revealSurprise(db, member, { role: "host" })).status, 403);
+  for (const session of [host, member]) {
+    for (const suffix of ["/surprises", "/surprises/reveal", `/surprises/${entry.id}`, `/surprises/${entry.id}/reveal`,
+      `/movies/${entry.id}`, `/plans/${entry.id}`]) {
+      const guessed = await send(db, session, suffix);
+      assert.ok([404, 405].includes(guessed.status), suffix);
+      assert.equal(JSON.stringify(guessed.data).includes(entry.title), false);
+    }
+    for (const method of ["PATCH", "DELETE"]) {
+      assert.equal((await send(db, session, `/surprises/${entry.id}`, { method, body: {} })).status, 404);
+      assert.equal((await send(db, session, `/movies/${entry.id}`, { method, body: { watched: true } })).status, 404);
+    }
+    assert.equal((await send(db, session, "/plans", { method: "POST", body: { plan: plan(entry.id) } })).status, 404);
+  }
+  for (const token of [undefined, "invalid", "f".repeat(64), host.inviteToken, foreign.token]) {
+    assert.equal((await api(db, path(host, "/surprises"), { method: "POST", token, body: entry })).status, 401);
+    assert.equal((await api(db, path(host, "/surprises/reveal"), { method: "POST", token, body: {} })).status, 401);
+  }
+  for (const changes of [
+    { id: "tmdb-42" }, { id: null }, { title: "" }, { title: " \n\t " }, { title: "X".repeat(121) },
+    { title: "A\u0000B" }, { title: 123 }, { year: 1887 }, { year: 2201 }, { year: 2000.5 },
+    { year: "2000" }, { year: undefined }, { addedBy: member.memberId }, { metadata: { title: "Extra" } },
+  ]) {
+    assert.equal((await submitSurprise(db, member, secretMovie(changes))).status, 400, JSON.stringify(changes));
+  }
+  for (const body of [{ id: entry.id }, { title: entry.title }, { revealedAt: "2026-01-01T00:00:00Z" }, { force: true }]) {
+    assert.equal((await revealSurprise(db, host, body)).status, 400);
+  }
+  assert.equal((await send(db, host, "/surprises", { method: "POST", raw: "{" })).status, 400);
+  assert.equal((await send(db, host, "/surprises", {
+    method: "POST", body: entry, headers: { "Content-Type": "text/plain" },
+  })).status, 415);
+  assert.equal((await send(db, host, "/surprises/reveal", { method: "POST", body: [] })).status, 400);
+  assert.deepEqual((await send(db, host)).data, initial);
+  for (const year of [1888, 2200, null]) {
+    assert.equal((await submitSurprise(db, host, secretMovie({ title: "Y".repeat(120), year }))).status, 200);
+  }
+});
+
+test("secret title/year deduplication and client IDs are idempotent across members, pending and revealed", async (t) => {
+  const db = database(t);
+  const host = (await create(db)).session;
+  const member = (await join(db, host.inviteToken)).session;
+  const original = secretMovie({ title: " \uff30\uff25\uff2c\uff29 \t bonita\n ", year: 2000 });
+  const first = await submitSurprise(db, member, original);
+  assert.equal(first.status, 200);
+  for (const entry of [
+    { ...original, title: "New title", year: 2001 },
+    secretMovie({ title: "peli bonita", year: 2000 }),
+    secretMovie({ title: "PELI\u00a0BONITA", year: 2000 }),
+  ]) assert.deepEqual((await submitSurprise(db, host, entry)).data, first.data);
+  const revealed = await revealSurprise(db, host);
+  assert.equal(revealed.data.surprise.history[0].title, "\uff30\uff25\uff2c\uff29 bonita");
+  assert.deepEqual((await submitSurprise(db, member, original)).data, revealed.data);
+  assert.deepEqual((await submitSurprise(db, member, secretMovie({ title: "peli bonita", year: 2000 }))).data, revealed.data);
+  for (const year of [null, 2001]) {
+    assert.equal((await submitSurprise(db, member, secretMovie({ title: "peli bonita", year }))).status, 200);
+  }
+  const beforeNullRetry = (await send(db, host)).data;
+  assert.deepEqual((await submitSurprise(db, host, secretMovie({ title: "PELI BONITA", year: null }))).data, beforeNullRetry);
+  const other = (await create(db, "Other party")).session;
+  assert.equal((await submitSurprise(db, other, original)).data.surprise.pendingCount, 1);
+  assert.equal(db.sqlite.prepare("SELECT count(*) AS n FROM party_surprises WHERE party_id = ?").get(host.partyId).n, 3);
+});
+
+test("weekly reveal is atomic, host-selected only by the server, and retry-safe through cooldown and exhaustion", async (t) => {
+  const db = database(t);
+  let now = Date.parse("2026-09-01T12:30:00.000Z");
+  t.mock.method(Date, "now", () => now);
+  const host = (await create(db)).session;
+  const before = (await send(db, host)).data;
+  const empty = await revealSurprise(db, host);
+  assert.equal(empty.status, 409);
+  assert.match(empty.data.error, /Todavía no hay/);
+  assert.deepEqual((await send(db, host)).data, before);
+  const entries = Array.from({ length: 3 }, (_, i) => secretMovie({ title: `Secret choice ${i}`, year: 2000 + i }));
+  for (const entry of entries) await submitSurprise(db, host, entry);
+  const submitted = (await send(db, host)).data;
+  const simultaneous = await Promise.all(Array.from({ length: 12 }, () => revealSurprise(db, host)));
+  const first = simultaneous[0].data;
+  for (const result of simultaneous) {
+    assert.equal(result.status, 200);
+    assert.deepEqual(result.data, first);
+  }
+  assert.equal(first.revision, submitted.revision + 1);
+  assert.equal(first.surprise.pendingCount, 2);
+  assert.equal(first.surprise.history.length, 1);
+  assert.equal(first.surprise.history[0].revealedAt, new Date(now).toISOString());
+  assert.equal(first.surprise.nextRevealAt, new Date(now + WEEK).toISOString());
+  now += WEEK - 1;
+  assert.deepEqual((await revealSurprise(db, host)).data, first);
+  now += 1;
+  const second = await revealSurprise(db, host);
+  assert.equal(second.data.surprise.history.length, 2);
+  assert.equal(second.data.surprise.history[0].revealedAt, new Date(now).toISOString());
+  assert.deepEqual(second.data.surprise.history[1], first.surprise.history[0]);
+  assert.equal(second.data.revision, first.revision + 1);
+  now += WEEK * 4;
+  const third = await revealSurprise(db, host);
+  assert.equal(third.data.surprise.history.length, 3, "elapsed weeks never reveal multiple entries");
+  assert.equal(third.data.surprise.pendingCount, 0);
+  assert.deepEqual(new Set(third.data.surprise.history.map((entry) => entry.title)), new Set(entries.map((entry) => entry.title)));
+  assert.deepEqual((await revealSurprise(db, host)).data, third.data, "empty queue retains this week's reveal");
+  now += WEEK;
+  assert.deepEqual((await revealSurprise(db, host)).data, third.data, "exhausted queue never repeats a film");
+  const newEntry = secretMovie({ title: "Nueva semana" });
+  await submitSurprise(db, host, newEntry);
+  const fourth = await revealSurprise(db, host);
+  assert.equal(fourth.data.surprise.history[0].title, newEntry.title);
+  assert.equal(fourth.data.surprise.history.length, 4);
+  await submitSurprise(db, host, secretMovie({ title: "Esperar otra semana" }));
+  const waiting = (await send(db, host)).data;
+  assert.deepEqual((await revealSurprise(db, host)).data, waiting, "submitting cannot reset cooldown");
+  assert.deepEqual(waiting.movies, []);
+  assert.deepEqual(waiting.plans, []);
+});
+
+test("concurrent surprise submissions, reveals and readers see coherent revisions and never skip reveals", async (t) => {
+  const db = database(t);
+  t.mock.method(Date, "now", () => Date.parse("2026-09-01T00:00:00Z"));
+  const host = (await create(db)).session;
+  const baseRevision = (await send(db, host)).data.revision;
+  const first = secretMovie();
+  await submitSurprise(db, host, first);
+  const entries = Array.from({ length: 20 }, (_, i) => secretMovie({ title: `Concurrent secret ${i}` }));
+  const results = await Promise.all(entries.flatMap((entry) => [
+    submitSurprise(db, host, entry), submitSurprise(db, host, { ...entry, id: randomUUID() }),
+    revealSurprise(db, host), send(db, host),
+  ]));
+  for (const result of results) {
+    assert.equal(result.status, 200);
+    const { pendingCount, history } = result.data.surprise;
+    assert.ok(history.length <= 1);
+    assert.equal(result.data.revision, baseRevision + pendingCount + 2 * history.length);
+    assertSurprisePrivacy(result.data, [first, ...entries], pendingCount, history.map((entry) => entry.title));
+  }
+  const current = (await send(db, host)).data;
+  assert.equal(current.surprise.pendingCount, 20);
+  assert.equal(current.surprise.history.length, 1);
+  assert.equal(current.revision, baseRevision + 22);
+});
+
+test("surprise capacity counts history, is enforced atomically, and still permits generic duplicate retries", async (t) => {
+  const db = database(t);
+  const host = (await create(db)).session;
+  const entries = Array.from({ length: 201 }, (_, i) => secretMovie({ title: `Capacity secret ${i}` }));
+  for (const entry of entries.slice(0, 199)) {
+    assert.equal((await submitSurprise(db, host, entry)).status, 200);
+  }
+  const last = await Promise.all(entries.slice(199).map((entry) => submitSurprise(db, host, entry)));
+  assert.deepEqual(last.map((result) => result.status).sort(), [200, 409]);
+  assert.match(last.find((result) => result.status === 409).data.error, /200 películas sorpresa/);
+  const full = (await send(db, host)).data;
+  assert.equal(full.surprise.pendingCount, 200);
+  assert.deepEqual((await submitSurprise(db, host, entries[0])).data, full);
+  assert.deepEqual((await submitSurprise(db, host, { ...entries[0], id: randomUUID() })).data, full);
+  const revealed = (await revealSurprise(db, host)).data;
+  assert.equal(revealed.surprise.pendingCount, 199);
+  assert.equal(revealed.surprise.history.length, 1);
+  const history = revealed.surprise.history[0];
+  assert.deepEqual((await submitSurprise(db, host, secretMovie({ title: history.title, year: history.year }))).data, revealed);
+  assert.equal((await submitSurprise(db, host, secretMovie({ title: "No space even after reveal" }))).status, 409);
+  assert.deepEqual((await send(db, host)).data, revealed);
+  assert.equal((await addMovie(db, host, custom())).movies.length, 1, "ordinary movies remain independent");
+});
+
+test("surprise write, revision and snapshot queries roll back together on database failures", async (t) => {
+  const db = database(t);
+  t.mock.method(console, "error", () => {});
+  const host = (await create(db)).session;
+  const entry = secretMovie();
+  await submitSurprise(db, host, entry);
+  const before = (await send(db, host)).data;
+  db.sqlite.exec(`CREATE TRIGGER test_surprise_reveal_failure AFTER UPDATE ON party_surprises
+    BEGIN SELECT RAISE(ABORT, 'private_surprise_failure'); END;`);
+  const failedReveal = await revealSurprise(db, host);
+  assert.equal(failedReveal.status, 500);
+  assert.equal(JSON.stringify(failedReveal.data).includes(entry.title), false);
+  assert.deepEqual((await send(db, host)).data, before);
+  db.sqlite.exec("DROP TRIGGER test_surprise_reveal_failure");
+  const originalBatch = db.batch.bind(db);
+  t.mock.method(db, "batch", (statements) => originalBatch([
+    ...statements, db.prepare("SELECT * FROM missing_snapshot_table"),
+  ]));
+  assert.equal((await submitSurprise(db, host, secretMovie({ title: "Rollback me" }))).status, 500);
+  assert.equal((await revealSurprise(db, host)).status, 500);
+  t.mock.restoreAll();
+  assert.deepEqual((await send(db, host)).data, before);
+});
+
+test("additive surprise migration preserves existing members, credentials, movies, plans and revisions", async (t) => {
+  const db = database(t, false);
+  for (const file of ["0001_parties.sql", "0002_movie_deletion.sql"]) {
+    db.sqlite.exec(readFileSync(new URL(`./migrations/${file}`, import.meta.url), "utf8"));
+  }
+  const partyId = randomUUID(), memberId = randomUUID();
+  const token = "b".repeat(64);
+  const movie = custom();
+  const scheduled = plan(movie.id);
+  db.sqlite.prepare("INSERT INTO parties (id, name, invite_hash) VALUES (?, ?, ?)").run(partyId, "Existing", digest("old invite"));
+  db.sqlite.prepare("INSERT INTO party_members (party_id, id, name, role, token_hash) VALUES (?, ?, ?, ?, ?)")
+    .run(partyId, memberId, "Existing host", "host", digest(token));
+  db.sqlite.prepare("INSERT INTO party_movies (party_id, id, metadata, custom_title, added_by, watched) VALUES (?, ?, ?, ?, ?, 1)")
+    .run(partyId, movie.id, JSON.stringify(movie), movie.title, memberId);
+  db.sqlite.prepare(`INSERT INTO party_plans
+    (party_id, id, movie_id, food_id, date, place, place_key, created_by, completed) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1)`)
+    .run(partyId, scheduled.id, movie.id, scheduled.foodId, scheduled.date, scheduled.place, scheduled.place, memberId);
+  const tables = ["parties", "party_members", "party_movies", "party_plans"];
+  const before = tables.map((table) => db.sqlite.prepare(`SELECT * FROM ${table}`).all());
+  db.sqlite.exec(readFileSync(new URL("./migrations/0003_party_surprises.sql", import.meta.url), "utf8"));
+  assert.deepEqual(tables.map((table) => db.sqlite.prepare(`SELECT * FROM ${table}`).all()), before);
+  assert.deepEqual(db.sqlite.prepare("PRAGMA foreign_key_check").all(), []);
+  const session = { partyId, token, memberId };
+  const result = await send(db, session);
+  assert.equal(result.status, 200);
+  assert.equal(result.data.revision, before[0][0].revision);
+  assert.deepEqual(result.data.surprise, { pendingCount: 0, history: [], nextRevealAt: null });
+  assert.equal(result.data.movies[0].watched, true);
+  assert.equal(result.data.plans[0].completed, true);
+  assert.equal((await submitSurprise(db, session, secretMovie())).status, 200);
+  assert.equal((await revealSurprise(db, session)).status, 200);
+  assert.deepEqual(tables.slice(1).map((table) => db.sqlite.prepare(`SELECT * FROM ${table}`).all()), before.slice(1));
 });
 
 test("simultaneous additions preserve distinct rows and consistent monotonic snapshots, including TMDB conflicts", async (t) => {

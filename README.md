@@ -153,6 +153,11 @@ For an existing deployment, apply the pending D1 migrations before deploying the
 updated Worker and frontend. Migration `0002_movie_deletion.sql` preserves existing
 movies and nights; future movie deletions atomically remove their associated nights
 and advance the shared revision, even when a movie has no nights.
+Migration `0003_party_surprises.sql` adds the independent anonymous queue without
+changing existing movies, plans, or memberships. Apply it to D1 before deploying the
+new Worker, then publish the frontend. An older Worker continues to support normal
+parties but the new interface disables surprise submissions until the API is updated.
+Publishing GitHub Pages alone does not update D1 or the Worker.
 
 **Before promoting a public deployment widely, configure production rate limiting
 for `POST /parties` and `POST /parties/join`**, and appropriate limits for reads and
@@ -181,6 +186,31 @@ invitation rotation/revocation, participant removal, or automatic party expiry.
   Members expose only `{id, name, role}`. Movies retain the saved-movie shape
   plus `addedBy`/`addedByName`; plans add `createdBy`/`createdByName`.
   Authors and initial watched/completed states are derived by the server.
+- **Surprise nights:** open the party dialog and use **Noches sorpresa / Surprise
+  movie nights** to submit a title and optional release year anonymously. This is
+  a separate queue: normal collection/catalog additions remain public and attributed.
+  Pending titles are withheld by the API from every participant, including the host;
+  only the pending count is shared. No submitter identity is stored for these entries.
+  At the meeting, the host confirms **Reveal this meeting's movie** to draw one random
+  title for everyone. Another draw unlocks **7 days after that reveal**, not at a
+  calendar-week boundary. Nothing is revealed automatically; missed weeks do not
+  trigger extra draws. Revealed titles stay in a separate history without attribution
+  and are not added to the public collection or plans.
+- `POST /parties/{partyId}/surprises` accepts `{id, title, year}`: a client UUID for
+  retries, a nonblank title of at most 120 characters, and `null` or a year from
+  1888 through 2200. All members can submit. Matching normalized titles and years
+  are not duplicated, even after reveal. Retries and duplicates return a snapshot
+  without identifying the submission. The separate queue allows **200 total entries**,
+  including revealed history.
+- `POST /parties/{partyId}/surprises/reveal` accepts `{}` and requires the host.
+  Repeated or concurrent requests during the seven-day cooldown return the existing
+  result instead of consuming another movie. Snapshots additionally include
+  `surprise: {pendingCount, history: [{title, year, revealedAt}], nextRevealAt}`.
+  Times are server-generated ISO timestamps; `nextRevealAt` is `null` until the first
+  reveal. No hidden entry IDs, titles, years, or submitter details are returned.
+  Anonymity is not protection against inference from submission timing, knowledge of
+  friends' tastes, shared browsers, or someone disclosing their proposal. The service
+  operator can access stored titles; this is not end-to-end encryption.
 - Names are trimmed, nonblank, and control-free: party names allow 80 characters,
   display names 40. Duplicate display names are allowed; identity is a server UUID.
   Custom titles allow 120 characters; TMDB metadata retains the frontend's bounds.

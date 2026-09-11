@@ -190,7 +190,7 @@ invitation rotation/revocation, participant removal, or automatic party expiry.
   movie nights** to submit a title and optional release year anonymously. This is
   a separate queue: normal collection/catalog additions remain public and attributed.
   Pending titles are withheld by the API from every participant, including the host;
-  only the pending count is shared. No submitter identity is stored for these entries.
+  only the pending proposal count is shared. No submitter identity is stored for these entries.
   At the meeting, the host confirms **Reveal this meeting's movie** to draw one random
   title for everyone. Another draw unlocks **7 days after that reveal**, not at a
   calendar-week boundary. Nothing is revealed automatically; missed weeks do not
@@ -198,13 +198,18 @@ invitation rotation/revocation, participant removal, or automatic party expiry.
   and are not added to the public collection or plans.
 - `POST /parties/{partyId}/surprises` accepts `{id, title, year}`: a client UUID for
   retries, a nonblank title of at most 120 characters, and `null` or a year from
-  1888 through 2200. All members can submit. Matching normalized titles and years
-  are not duplicated, even after reveal. Retries and duplicates return a snapshot
-  without identifying the submission. The separate queue allows **200 total entries**,
-  including revealed history.
+  1888 through 2200. All members can submit. Each new UUID counts as a proposal,
+  regardless of whether its title already exists; matching normalized titles and years
+  are grouped only at reveal, so submissions cannot probe the hidden list. Reusing a
+  UUID is an idempotent retry. The separate queue allows **200 total proposals**,
+  including duplicates and revealed entries. At capacity, every new UUID is rejected
+  identically regardless of its title.
 - `POST /parties/{partyId}/surprises/reveal` accepts `{}` and requires the host.
   Repeated or concurrent requests during the seven-day cooldown return the existing
-  result instead of consuming another movie. Snapshots additionally include
+  result instead of consuming another movie. The draw chooses among distinct
+  title/year groups; submitting duplicates does not increase a movie's chances.
+  Proposals matching an already revealed title are retired at the next eligible
+  reveal without drawing that movie again. Snapshots additionally include
   `surprise: {pendingCount, history: [{title, year, revealedAt}], nextRevealAt}`.
   Times are server-generated ISO timestamps; `nextRevealAt` is `null` until the first
   reveal. No hidden entry IDs, titles, years, or submitter details are returned.

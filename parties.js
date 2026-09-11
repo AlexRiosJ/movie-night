@@ -463,8 +463,8 @@ async function submitPartySurprise(event) {
   party.surpriseStatus = null;
   if (!await writeParty("/surprises", "POST", submission)) return;
   clearSurpriseDraft();
-  party.surpriseStatus = ["Propuesta recibida de forma an\u00f3nima. Si el t\u00edtulo y a\u00f1o ya estaban, no se duplican.",
-    "Proposal received anonymously. If the title and year were already submitted, they are not duplicated."];
+  party.surpriseStatus = ["Propuesta recibida de forma an\u00f3nima. Los t\u00edtulos repetidos se agrupan al revelar.",
+    "Proposal received anonymously. Duplicate titles are grouped when revealing."];
   renderPartySurprises();
 }
 
@@ -482,7 +482,7 @@ function renderPartySurprises() {
   $("party-surprises").hidden = !party.session;
   $("party-surprise-form").hidden = !supported;
   $("party-surprise-count").textContent = surprise
-    ? t(`${surprise.pendingCount} pel\u00edculas ocultas pendientes.`, `${surprise.pendingCount} hidden movies pending.`)
+    ? t(`${surprise.pendingCount} propuestas ocultas pendientes.`, `${surprise.pendingCount} hidden proposals pending.`)
     : t("Las noches sorpresa requieren actualizar el Worker y su base de datos.",
       "Surprise nights require updating the Worker and its database.");
   $("party-surprise-status").hidden = !party.surpriseStatus;

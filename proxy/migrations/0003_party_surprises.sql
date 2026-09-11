@@ -8,13 +8,12 @@ CREATE TABLE party_surprises (
   revealed_at INTEGER CHECK (revealed_at IS NULL OR typeof(revealed_at) = 'integer'),
   PRIMARY KEY (party_id, id)
 );
-CREATE UNIQUE INDEX party_surprise_title_year ON party_surprises(party_id, title_key, ifnull(year, 0));
+CREATE INDEX party_surprise_title_year ON party_surprises(party_id, title_key, year);
 CREATE INDEX party_surprise_reveals ON party_surprises(party_id, revealed_at);
 
 CREATE TRIGGER party_surprise_limit BEFORE INSERT ON party_surprises
 WHEN NOT EXISTS (
-  SELECT 1 FROM party_surprises WHERE party_id = NEW.party_id
-    AND (id = NEW.id OR (title_key = NEW.title_key AND year IS NEW.year))
+  SELECT 1 FROM party_surprises WHERE party_id = NEW.party_id AND id = NEW.id
 ) AND (SELECT count(*) FROM party_surprises WHERE party_id = NEW.party_id) >= 200
 BEGIN
   SELECT RAISE(ABORT, 'party_surprise_limit');

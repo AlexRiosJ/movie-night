@@ -190,8 +190,10 @@ function snapshotStatements(db, partyId) {
       FROM party_plans p JOIN party_members a ON a.party_id = p.party_id AND a.id = p.created_by
       WHERE p.party_id = ? ORDER BY p.rowid`).bind(partyId),
     db.prepare("SELECT count(*) AS pending_count FROM party_surprises WHERE party_id = ? AND revealed_at IS NULL").bind(partyId),
-    db.prepare(`SELECT title, year, revealed_at FROM party_surprises
-      WHERE party_id = ? AND revealed_at IS NOT NULL ORDER BY revealed_at DESC`).bind(partyId),
+    db.prepare(`SELECT title, year, revealed_at FROM party_surprises WHERE rowid IN (
+      SELECT min(rowid) FROM party_surprises WHERE party_id = ? AND revealed_at IS NOT NULL
+      GROUP BY title_key, year
+    ) ORDER BY revealed_at DESC`).bind(partyId),
   ];
 }
 
@@ -225,29 +227,46 @@ async function mutateSurprise(request, db, route, member) {
     throw new PartyError(403, "Solo el anfitrión puede revelar la sorpresa.");
   }
   const body = await readBody(request);
-  let statement;
+  const statements = [];
   if (kind === "surprises") {
     const entry = validateSurprise(body);
-    // Both identity and title/year retries succeed without disclosing which entry matched.
-    statement = db.prepare(`INSERT INTO party_surprises (party_id, id, title, title_key, year)
+    // Looking up titles here would leak hidden queue membership through counts and capacity.
+    statements.push(db.prepare(`INSERT INTO party_surprises (party_id, id, title, title_key, year)
       SELECT ?, ?, ?, ?, ? WHERE NOT EXISTS
-        (SELECT 1 FROM party_surprises WHERE party_id = ? AND (id = ? OR (title_key = ? AND year IS ?)))
-      ON CONFLICT DO NOTHING`)
-      .bind(partyId, entry.id, entry.title, entry.titleKey, entry.year, partyId, entry.id, entry.titleKey, entry.year);
+        (SELECT 1 FROM party_surprises WHERE party_id = ? AND id = ?)
+      ON CONFLICT (party_id, id) DO NOTHING`)
+      .bind(partyId, entry.id, entry.title, entry.titleKey, entry.year, partyId, entry.id));
   } else {
     if (Object.keys(body).length) invalid();
     const now = Date.now();
-    // Selection and the cooldown check run in the same write, serialized by D1's transaction.
-    statement = db.prepare(`UPDATE party_surprises SET revealed_at = ?
-      WHERE party_id = ? AND id = (
-        SELECT id FROM party_surprises WHERE party_id = ? AND revealed_at IS NULL ORDER BY random() LIMIT 1
+    // Retire late duplicates only at an eligible host reveal, never during submission or polling.
+    statements.push(db.prepare(`UPDATE party_surprises AS pending SET revealed_at = (
+        SELECT min(revealed.revealed_at) FROM party_surprises AS revealed
+        WHERE revealed.party_id = pending.party_id AND revealed.title_key = pending.title_key
+          AND revealed.year IS pending.year AND revealed.revealed_at IS NOT NULL
+      ) WHERE pending.party_id = ? AND pending.revealed_at IS NULL AND EXISTS (
+        SELECT 1 FROM party_surprises AS revealed
+        WHERE revealed.party_id = pending.party_id AND revealed.title_key = pending.title_key
+          AND revealed.year IS pending.year AND revealed.revealed_at IS NOT NULL
       ) AND NOT EXISTS (
         SELECT 1 FROM party_surprises WHERE party_id = ? AND revealed_at > ?
-      )`).bind(now, partyId, partyId, partyId, now - SURPRISE_INTERVAL_MS);
+      )`).bind(partyId, partyId, now - SURPRISE_INTERVAL_MS));
+    // Materialize one random distinct group so each updated duplicate uses the same draw.
+    statements.push(db.prepare(`WITH chosen AS MATERIALIZED (
+        SELECT title_key, year FROM party_surprises
+        WHERE party_id = ? AND revealed_at IS NULL AND NOT EXISTS (
+          SELECT 1 FROM party_surprises WHERE party_id = ? AND revealed_at > ?
+        )
+        GROUP BY title_key, year ORDER BY random() LIMIT 1
+      )
+      UPDATE party_surprises SET revealed_at = ?
+      WHERE party_id = ? AND revealed_at IS NULL AND EXISTS (
+        SELECT 1 FROM chosen WHERE chosen.title_key = party_surprises.title_key AND chosen.year IS party_surprises.year
+      )`).bind(partyId, partyId, now - SURPRISE_INTERVAL_MS, now, partyId));
   }
-  const results = await db.batch([statement, ...snapshotStatements(db, partyId)]);
+  const results = await db.batch([...statements, ...snapshotStatements(db, partyId)]);
   const current = snapshot(results);
-  if (kind === "reveal" && !results[0].meta.changes && !current.surprise.history.length) {
+  if (kind === "reveal" && !current.surprise.history.length) {
     throw new PartyError(409, "Todavía no hay películas sorpresa para revelar.");
   }
   return json(current);
@@ -362,7 +381,7 @@ function databaseError(error) {
     ["party_member_limit", "La party ya tiene el m\u00e1ximo de 50 participantes."],
     ["party_movie_limit", "La party ya tiene el m\u00e1ximo de 200 pel\u00edculas."],
     ["party_plan_limit", "La party ya tiene el m\u00e1ximo de 500 planes."],
-    ["party_surprise_limit", "La party ya tiene el máximo de 200 películas sorpresa."],
+    ["party_surprise_limit", "La party ya tiene el máximo de 200 propuestas sorpresa."],
   ]) {
     if (message.includes(marker)) return new PartyError(409, description);
   }

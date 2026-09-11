@@ -100,7 +100,7 @@ const API_ERROR_TRANSLATIONS = {
   "La party ya tiene el m\u00e1ximo de 50 participantes.": "The party has reached the limit of 50 participants.",
   "La party ya tiene el m\u00e1ximo de 200 pel\u00edculas.": "The party has reached the limit of 200 movies.",
   "La party ya tiene el m\u00e1ximo de 500 planes.": "The party has reached the limit of 500 plans.",
-  "La party ya tiene el máximo de 200 películas sorpresa.": "The party has reached the limit of 200 surprise movies.",
+  "La party ya tiene el máximo de 200 propuestas sorpresa.": "The party has reached the limit of 200 surprise proposals.",
   "Solo el anfitrión puede revelar la sorpresa.": "Only the host can reveal the surprise.",
   "Todavía no hay películas sorpresa para revelar.": "There are no surprise movies to reveal yet.",
   "Ya existe una pel\u00edcula personalizada con ese t\u00edtulo.": "A custom movie with that title already exists.",

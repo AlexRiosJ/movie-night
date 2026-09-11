@@ -1293,7 +1293,7 @@ test("surprise submissions stay separate, clear confirmed drafts, and never pers
   assert.equal(ui.nodes.get("party-surprise-title").value, "");
   assert.equal(ui.run("party.surpriseSubmission"), null);
   assert.equal(ui.run("state.movies.length"), 0);
-  assert.match(ui.nodes.get("party-surprise-count").textContent, /1 pel/);
+  assert.match(ui.nodes.get("party-surprise-count").textContent, /1 propuestas/);
   assert.equal(JSON.stringify([...ui.storage.values()]).includes("Hidden"), false);
   ui.run("changeCatalogLanguage('en-US')");
   assert.match(ui.nodes.get("party-surprise-status").textContent, /received anonymously/);

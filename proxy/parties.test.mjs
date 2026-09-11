@@ -383,30 +383,134 @@ test("surprise routes reject guessed access, invalid input, foreign sessions and
   }
 });
 
-test("secret title/year deduplication and client IDs are idempotent across members, pending and revealed", async (t) => {
+test("fresh proposal IDs increment counts identically for matching and novel titles; only UUID retries are idempotent", async (t) => {
   const db = database(t);
   const host = (await create(db)).session;
   const member = (await join(db, host.inviteToken)).session;
   const original = secretMovie({ title: " \uff30\uff25\uff2c\uff29 \t bonita\n ", year: 2000 });
   const first = await submitSurprise(db, member, original);
   assert.equal(first.status, 200);
+  assert.deepEqual((await submitSurprise(db, host, { ...original, title: "New title", year: 2001 })).data, first.data);
+  let previous = first.data;
   for (const entry of [
-    { ...original, title: "New title", year: 2001 },
     secretMovie({ title: "peli bonita", year: 2000 }),
     secretMovie({ title: "PELI\u00a0BONITA", year: 2000 }),
-  ]) assert.deepEqual((await submitSurprise(db, host, entry)).data, first.data);
-  const revealed = await revealSurprise(db, host);
-  assert.equal(revealed.data.surprise.history[0].title, "\uff30\uff25\uff2c\uff29 bonita");
-  assert.deepEqual((await submitSurprise(db, member, original)).data, revealed.data);
-  assert.deepEqual((await submitSurprise(db, member, secretMovie({ title: "peli bonita", year: 2000 }))).data, revealed.data);
-  for (const year of [null, 2001]) {
-    assert.equal((await submitSurprise(db, member, secretMovie({ title: "peli bonita", year }))).status, 200);
+    secretMovie({ title: "Not previously submitted", year: 2000 }),
+    secretMovie({ title: "peli bonita", year: null }),
+    secretMovie({ title: "peli bonita", year: 2001 }),
+    secretMovie({ title: "PELI BONITA", year: null }),
+  ]) {
+    const response = await submitSurprise(db, host, entry);
+    assert.equal(response.status, 200);
+    const expected = structuredClone(previous);
+    expected.revision++;
+    expected.surprise.pendingCount++;
+    assert.deepEqual(response.data, expected, "no title membership signal in the submission response");
+    assert.deepEqual((await submitSurprise(db, member, entry)).data, expected);
+    previous = response.data;
   }
-  const beforeNullRetry = (await send(db, host)).data;
-  assert.deepEqual((await submitSurprise(db, host, secretMovie({ title: "PELI BONITA", year: null }))).data, beforeNullRetry);
+  const revealed = await revealSurprise(db, host);
+  assert.deepEqual((await submitSurprise(db, member, original)).data, revealed.data);
+  previous = revealed.data;
+  for (const entry of [
+    secretMovie({
+      title: revealed.data.surprise.history[0].title, year: revealed.data.surprise.history[0].year,
+    }),
+    secretMovie({ title: "A completely new proposal", year: null }),
+  ]) {
+    const response = await submitSurprise(db, member, entry);
+    assert.equal(response.status, 200);
+    const expected = structuredClone(previous);
+    expected.revision++;
+    expected.surprise.pendingCount++;
+    assert.deepEqual(response.data, expected, "already revealed titles also count as pending proposals");
+    previous = response.data;
+  }
   const other = (await create(db, "Other party")).session;
   assert.equal((await submitSurprise(db, other, original)).data.surprise.pendingCount, 1);
-  assert.equal(db.sqlite.prepare("SELECT count(*) AS n FROM party_surprises WHERE party_id = ?").get(host.partyId).n, 3);
+  assert.equal(db.sqlite.prepare("SELECT count(*) AS n FROM party_surprises WHERE party_id = ?").get(host.partyId).n, 9);
+});
+
+test("host reveal draws distinct title/year groups once, retires every duplicate, and preserves the earliest display title", async (t) => {
+  const db = database(t);
+  let now = Date.parse("2026-09-01T00:00:00Z");
+  t.mock.method(Date, "now", () => now);
+  const host = (await create(db)).session;
+  const original = secretMovie({ title: " \uff21  movie ", year: null });
+  const proposals = [
+    original, ...Array.from({ length: 9 }, () => secretMovie({ title: "a movie", year: null })),
+    secretMovie({ title: "B movie", year: null }), secretMovie({ title: "B movie", year: 2000 }),
+  ];
+  for (const entry of proposals) assert.equal((await submitSurprise(db, host, entry)).status, 200);
+  let draws = 0;
+  db.sqlite.function("random", () => ++draws);
+  const before = (await send(db, host)).data;
+  const results = await Promise.all(Array.from({ length: 8 }, () => revealSurprise(db, host)));
+  for (const result of results) assert.deepEqual(result.data, results[0].data);
+  const first = results[0].data;
+  assert.equal(draws, 3, "one random sort key per distinct eligible title/year, not per proposal");
+  assert.equal(first.surprise.history.length, 1);
+  assert.equal(first.surprise.history[0].title, "\uff21 movie");
+  assert.equal(first.surprise.pendingCount, 2);
+  assert.equal(first.revision, before.revision + 10);
+  assert.equal(db.sqlite.prepare("SELECT count(*) AS n FROM party_surprises WHERE revealed_at = ?").get(now).n, 10);
+  now += WEEK;
+  const second = await revealSurprise(db, host);
+  assert.equal(second.data.surprise.history.length, 2);
+  assert.equal(second.data.surprise.pendingCount, 1);
+  assert.deepEqual(second.data.surprise.history[1], first.surprise.history[0]);
+  now += WEEK;
+  const third = await revealSurprise(db, host);
+  assert.equal(third.data.surprise.history.length, 3);
+  assert.equal(third.data.surprise.pendingCount, 0);
+  assert.deepEqual(third.data.surprise.history.filter((entry) => entry.title === "B movie").map((entry) => entry.year).sort(), [2000, null].sort());
+});
+
+test("late duplicate proposals remain pending through cooldown, then retire atomically without a second reveal", async (t) => {
+  const db = database(t);
+  let now = Date.parse("2026-09-01T00:00:00Z");
+  t.mock.method(Date, "now", () => now);
+  const host = (await create(db)).session;
+  const member = (await join(db, host.inviteToken)).session;
+  const original = secretMovie({ title: "\uff21 movie", year: 2000 });
+  await submitSurprise(db, member, original);
+  const first = (await revealSurprise(db, host)).data;
+  const originalTimestamp = now;
+  const late = [secretMovie({ title: "a movie", year: 2000 }), secretMovie({ title: "A MOVIE", year: 2000 })];
+  for (const entry of late) await submitSurprise(db, member, entry);
+  const pending = (await send(db, host)).data;
+  assert.equal(pending.surprise.pendingCount, 2);
+  assert.deepEqual(pending.surprise.history, first.surprise.history);
+  assert.deepEqual((await revealSurprise(db, host)).data, pending);
+  now += WEEK - 1;
+  assert.deepEqual((await revealSurprise(db, host)).data, pending);
+  now++;
+  const retired = await Promise.all(Array.from({ length: 10 }, () => revealSurprise(db, host)));
+  for (const result of retired) assert.deepEqual(result.data, retired[0].data);
+  const cleaned = retired[0].data;
+  assert.deepEqual(cleaned.surprise, first.surprise);
+  assert.equal(cleaned.revision, pending.revision + 2);
+  assert.equal(db.sqlite.prepare("SELECT count(*) AS n FROM party_surprises WHERE revealed_at = ?").get(originalTimestamp).n, 3);
+  for (const entry of [original, ...late]) assert.deepEqual((await submitSurprise(db, member, entry)).data, cleaned);
+  const lateAgain = secretMovie({ title: "a movie", year: 2000 });
+  await submitSurprise(db, member, lateAgain);
+  await submitSurprise(db, member, secretMovie({ title: "Next distinct movie", year: null }));
+  const beforeFailure = (await send(db, host)).data;
+  db.sqlite.exec(`CREATE TRIGGER test_reject_new_group AFTER UPDATE ON party_surprises
+    WHEN NEW.title = 'Next distinct movie'
+    BEGIN SELECT RAISE(ABORT, 'test_reject_new_group'); END;`);
+  const logged = t.mock.method(console, "error", () => {});
+  assert.equal((await revealSurprise(db, host)).status, 500);
+  assert.deepEqual((await send(db, host)).data, beforeFailure, "retirement rolls back if the new reveal fails");
+  db.sqlite.exec("DROP TRIGGER test_reject_new_group");
+  logged.mock.restore();
+  const revealNext = await revealSurprise(db, host);
+  assert.equal(revealNext.data.surprise.pendingCount, 0);
+  assert.equal(revealNext.data.surprise.history.length, 2);
+  assert.equal(revealNext.data.surprise.history[0].title, "Next distinct movie");
+  assert.deepEqual(revealNext.data.surprise.history[1], first.surprise.history[0]);
+  assert.equal(revealNext.data.surprise.nextRevealAt, new Date(now + WEEK).toISOString());
+  assert.deepEqual((await submitSurprise(db, member, lateAgain)).data, revealNext.data);
 });
 
 test("weekly reveal is atomic, host-selected only by the server, and retry-safe through cooldown and exhaustion", async (t) => {
@@ -470,7 +574,7 @@ test("concurrent surprise submissions, reveals and readers see coherent revision
   await submitSurprise(db, host, first);
   const entries = Array.from({ length: 20 }, (_, i) => secretMovie({ title: `Concurrent secret ${i}` }));
   const results = await Promise.all(entries.flatMap((entry) => [
-    submitSurprise(db, host, entry), submitSurprise(db, host, { ...entry, id: randomUUID() }),
+    submitSurprise(db, host, entry), submitSurprise(db, host, entry),
     revealSurprise(db, host), send(db, host),
   ]));
   for (const result of results) {
@@ -486,26 +590,34 @@ test("concurrent surprise submissions, reveals and readers see coherent revision
   assert.equal(current.revision, baseRevision + 22);
 });
 
-test("surprise capacity counts history, is enforced atomically, and still permits generic duplicate retries", async (t) => {
+test("surprise capacity counts all proposals including duplicates/history without a known-title oracle", async (t) => {
   const db = database(t);
   const host = (await create(db)).session;
-  const entries = Array.from({ length: 201 }, (_, i) => secretMovie({ title: `Capacity secret ${i}` }));
+  const entries = Array.from({ length: 201 }, (_, i) => secretMovie({ title: `Capacity secret ${i % 2}` }));
   for (const entry of entries.slice(0, 199)) {
     assert.equal((await submitSurprise(db, host, entry)).status, 200);
   }
   const last = await Promise.all(entries.slice(199).map((entry) => submitSurprise(db, host, entry)));
   assert.deepEqual(last.map((result) => result.status).sort(), [200, 409]);
-  assert.match(last.find((result) => result.status === 409).data.error, /200 películas sorpresa/);
+  assert.match(last.find((result) => result.status === 409).data.error, /200 propuestas sorpresa/);
   const full = (await send(db, host)).data;
   assert.equal(full.surprise.pendingCount, 200);
   assert.deepEqual((await submitSurprise(db, host, entries[0])).data, full);
-  assert.deepEqual((await submitSurprise(db, host, { ...entries[0], id: randomUUID() })).data, full);
+  const knownFailure = await submitSurprise(db, host, { ...entries[0], id: randomUUID() });
+  const novelFailure = await submitSurprise(db, host, secretMovie({ title: "Unknown at capacity" }));
+  assert.equal(knownFailure.status, 409);
+  assert.equal(novelFailure.status, 409);
+  assert.deepEqual(knownFailure.data, novelFailure.data);
   const revealed = (await revealSurprise(db, host)).data;
-  assert.equal(revealed.surprise.pendingCount, 199);
+  assert.ok(revealed.surprise.pendingCount < 200);
   assert.equal(revealed.surprise.history.length, 1);
   const history = revealed.surprise.history[0];
-  assert.deepEqual((await submitSurprise(db, host, secretMovie({ title: history.title, year: history.year }))).data, revealed);
-  assert.equal((await submitSurprise(db, host, secretMovie({ title: "No space even after reveal" }))).status, 409);
+  const revealedFailure = await submitSurprise(db, host, secretMovie({ title: history.title, year: history.year }));
+  const newFailure = await submitSurprise(db, host, secretMovie({ title: "No space even after reveal" }));
+  assert.equal(revealedFailure.status, 409);
+  assert.equal(newFailure.status, 409);
+  assert.deepEqual(revealedFailure.data, newFailure.data);
+  assert.deepEqual((await submitSurprise(db, host, entries[0])).data, revealed);
   assert.deepEqual((await send(db, host)).data, revealed);
   assert.equal((await addMovie(db, host, custom())).movies.length, 1, "ordinary movies remain independent");
 });

@@ -1432,6 +1432,160 @@ test("switching lists clears previews and ignores late random responses", async 
   assert.equal(ui.nodes.get("add-selected-movie").hidden, true);
 });
 
+const surpriseSnapshot = (surprise = {}, revision = 0) => ({
+  ...snapshot({ revision }),
+  surprise: { pendingCount: 0, history: [], nextRevealAt: null, ...surprise },
+});
+
+test("surprise submissions stay separate, clear confirmed drafts, and never persist secret titles", async () => {
+  const calls = [];
+  const ui = app({ fetch: async (url, options) => {
+    calls.push({ url, options });
+    return json(surpriseSnapshot({ pendingCount: 1 }, 1));
+  } });
+  enterParty(ui, surpriseSnapshot());
+  ui.nodes.get("party-surprise-title").value = "  Hidden   movie  ";
+  ui.nodes.get("party-surprise-year").value = "1999";
+  await ui.nodes.get("party-surprise-form").listeners.submit({ preventDefault() {} });
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].url.pathname, `/parties/${sharedSession().partyId}/surprises`);
+  const body = JSON.parse(calls[0].options.body);
+  assert.equal(body.title, "Hidden movie");
+  assert.equal(body.year, 1999);
+  assert.match(body.id, /^[a-f0-9-]{36}$/);
+  assert.deepEqual(Object.keys(body).sort(), ["id", "title", "year"]);
+  assert.equal(ui.nodes.get("party-surprise-title").value, "");
+  assert.equal(ui.run("party.surpriseSubmission"), null);
+  assert.equal(ui.run("state.movies.length"), 0);
+  assert.match(ui.nodes.get("party-surprise-count").textContent, /1 propuestas/);
+  assert.equal(JSON.stringify([...ui.storage.values()]).includes("Hidden"), false);
+  ui.run("changeCatalogLanguage('en-US')");
+  assert.match(ui.nodes.get("party-surprise-status").textContent, /received anonymously/);
+  assert.match(ui.nodes.get("party-surprise-count").textContent, /1 hidden/);
+});
+
+test("failed surprise writes reuse their id and block double submits; leaving erases the draft", async () => {
+  const first = deferred();
+  const calls = [];
+  const ui = app({ fetch: async (_url, options) => {
+    calls.push(JSON.parse(options.body));
+    if (calls.length === 1) return first.promise;
+    return json(surpriseSnapshot({ pendingCount: 1 }, 1));
+  } });
+  enterParty(ui, surpriseSnapshot());
+  ui.nodes.get("party-surprise-title").value = "Retry secret";
+  const writing = ui.run("submitPartySurprise({ preventDefault() {} })");
+  assert.equal(ui.nodes.get("party-surprise-submit").disabled, true);
+  assert.equal(ui.nodes.get("party-surprise-title").disabled, true);
+  await ui.run("submitPartySurprise({ preventDefault() {} })");
+  assert.equal(calls.length, 1);
+  first.resolve(json({ error: "No se pudo confirmar el cambio." }, 503));
+  await writing;
+  assert.equal(ui.nodes.get("party-surprise-title").value, "Retry secret");
+  await ui.run("submitPartySurprise({ preventDefault() {} })");
+  assert.equal(calls[0].id, calls[1].id);
+  ui.nodes.get("party-surprise-title").value = "Unsent secret";
+  ui.run("leaveParty()");
+  assert.equal(ui.nodes.get("party-surprise-title").value, "");
+  assert.equal(ui.nodes.get("party-surprises").hidden, true);
+  assert.equal(ui.run("party.surpriseSubmission"), null);
+});
+
+test("surprise reveal requires host confirmation and renders only revealed history without authors", async () => {
+  const calls = [];
+  const revealedAt = new Date().toISOString();
+  const nextRevealAt = new Date(Date.now() + 7 * 86400000).toISOString();
+  const revealed = surpriseSnapshot({
+    pendingCount: 1, nextRevealAt,
+    history: [{ title: "<img src=x onerror=alert(1)>", year: 2000, revealedAt }],
+  }, 2);
+  const ui = app({ fetch: async (url, options) => {
+    calls.push({ url, options });
+    return json(revealed);
+  } });
+  enterParty(ui, surpriseSnapshot({ pendingCount: 2 }));
+  ui.window.confirm = () => false;
+  await ui.nodes.get("party-surprise-reveal").listeners.click();
+  assert.equal(calls.length, 0);
+  ui.window.confirm = () => true;
+  await ui.nodes.get("party-surprise-reveal").listeners.click();
+  assert.equal(calls[0].url.pathname, `/parties/${sharedSession().partyId}/surprises/reveal`);
+  assert.equal(ui.nodes.get("party-surprise-reveal").disabled, true);
+  assert.match(ui.nodes.get("party-surprise-next").textContent, /Pr\u00f3ximo sorteo/);
+  const history = ui.nodes.get("party-surprise-history").children;
+  assert.equal(history.length, 1);
+  assert.match(history[0].textContent, /^<img src=x onerror=alert\(1\)> \(2000\)/);
+  assert.equal(history[0].children.length, 0);
+  assert.equal(history[0].textContent.includes("Alex"), false);
+  assert.equal(ui.run("state.movies.length"), 0);
+  ui.run("party.snapshot.members[0].role = 'member'; renderParty()");
+  assert.equal(ui.nodes.get("party-surprise-reveal").hidden, true);
+  await ui.run("revealPartySurprise()");
+  assert.equal(calls.length, 1);
+});
+
+test("surprise controls handle empty queues, legacy Workers, invalid snapshots and synchronization", async () => {
+  const ui = app();
+  enterParty(ui);
+  assert.equal(ui.nodes.get("party-surprise-form").hidden, true);
+  assert.match(ui.nodes.get("party-surprise-count").textContent, /actualizar el Worker/);
+  await ui.run("submitPartySurprise({ preventDefault() {} })");
+  ui.set("updated", surpriseSnapshot({}, 1));
+  ui.run("applyPartySnapshot(updated); renderParty()");
+  assert.equal(ui.nodes.get("party-surprise-form").hidden, false);
+  assert.equal(ui.nodes.get("party-surprise-reveal").disabled, true);
+  for (const bad of [{ pendingCount: -1 }, { pendingCount: 201 }, { history: [{ title: "bad" }] },
+    { nextRevealAt: "invalid" }]) {
+    ui.set("updated", surpriseSnapshot(bad, 2));
+    assert.throws(() => ui.run("applyPartySnapshot(updated)"), /sorpresa no compatibles/);
+    assert.equal(ui.run("party.revision"), 1);
+  }
+  ui.run("party.loading = true; renderParty()");
+  assert.equal(ui.nodes.get("party-surprise-submit").disabled, true);
+});
+
+test("two browsers keep proposals secret through reload and share only the host's weekly reveal", async (t) => {
+  const db = new D1Database();
+  t.after(() => db.sqlite.close());
+  const fetch = (url, options) => worker.fetch(new Request(url, {
+    ...options, headers: { ...options.headers, Origin: "https://alexriosj.github.io" },
+  }), { PARTY_DB: db, ALLOWED_ORIGINS: "https://alexriosj.github.io" });
+  const host = app({ fetch });
+  host.run("api.baseUrl = 'https://api.example.com'; catalog.loaded = true");
+  host.nodes.get("party-name").value = "Secret Fridays";
+  host.nodes.get("party-display-name").value = "Alex";
+  await host.run("submitParty({ preventDefault() {} })");
+  const guest = app({ fetch, href: host.nodes.get("party-link").value });
+  guest.run("api.baseUrl = 'https://api.example.com'; catalog.loaded = true");
+  guest.nodes.get("party-display-name").value = "Sam";
+  await guest.run("submitParty({ preventDefault() {} })");
+  for (const [client, title] of [[host, "Hidden Alpha"], [guest, "Hidden Beta"]]) {
+    client.nodes.get("party-surprise-title").value = title;
+    await client.run("submitPartySurprise({ preventDefault() {} })");
+    assert.equal(client.run("party.error"), "");
+  }
+  await host.run("refreshParty()");
+  for (const client of [host, guest]) {
+    assert.equal(client.run("party.snapshot.surprise.pendingCount"), 2);
+    assert.equal(client.run("JSON.stringify(party.snapshot)").includes("Hidden"), false);
+    assert.equal(client.run("state.movies.length"), 0);
+    assert.equal(JSON.stringify([...client.storage.values()]).includes("Hidden"), false);
+  }
+  const reloaded = app({ fetch, config: "https://api.example.com",
+    partyRaw: guest.storage.get("movie-night:parties:v1") });
+  await reloaded.run("partyReady");
+  assert.equal(reloaded.run("party.snapshot.surprise.pendingCount"), 2);
+  assert.equal(reloaded.nodes.get("party-surprise-reveal").hidden, true);
+  await host.run("revealPartySurprise()");
+  await reloaded.run("refreshParty()");
+  assert.equal(host.run("party.error"), "");
+  assert.equal(reloaded.run("party.snapshot.surprise.pendingCount"), 1);
+  assert.equal(reloaded.run("party.snapshot.surprise.history.length"), 1);
+  assert.equal(reloaded.run("JSON.stringify(party.snapshot.surprise)"), host.run("JSON.stringify(party.snapshot.surprise)"));
+  await host.run("revealPartySurprise()");
+  assert.equal(host.run("party.snapshot.surprise.history.length"), 1);
+});
+
 test("party UI, roles, API errors, storage warnings and copy feedback switch language without changing names", async () => {
   const ui = app({ fetch: async () => json(page([])) });
   const data = snapshot();

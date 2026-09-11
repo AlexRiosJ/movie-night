@@ -1,4 +1,5 @@
 const MAX_BODY_BYTES = 32 * 1024;
+const SURPRISE_INTERVAL_MS = 7 * 24 * 60 * 60 * 1000;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const TOKEN = /^[0-9a-f]{64}$/;
 const GENRES = new Set(["spooky", "cozy", "sci-fi", "fantasy", "christmas", "general"]);
@@ -108,6 +109,14 @@ function validatePlan(value) {
   };
 }
 
+function validateSurprise(value) {
+  if (Object.keys(value).some((key) => !["id", "title", "year"].includes(key))
+    || typeof value.title !== "string"
+    || !(value.year === null || (Number.isInteger(value.year) && value.year >= 1888 && value.year <= 2200))) invalid();
+  const title = text(value.title.replace(/\s+/gu, " ").trim(), 120);
+  return { id: uuid(value.id), title, year: value.year, titleKey: normalized(title).replace(/\s+/gu, " ").trim() };
+}
+
 async function readBody(request) {
   if (request.headers.get("Content-Type")?.split(";")[0].trim().toLowerCase() !== "application/json") {
     throw new PartyError(415, "Env\u00eda los datos como application/json.");
@@ -155,10 +164,14 @@ function parseRoute(url) {
   if (url.search) invalid("Esta ruta no admite par\u00e1metros de consulta.");
   if (url.pathname === "/parties") return { kind: "create", methods: ["POST"] };
   if (url.pathname === "/parties/join") return { kind: "join", methods: ["POST"] };
-  const match = /^\/parties\/([^/]+)(?:\/(movies|plans)(?:\/([^/]+))?)?$/.exec(url.pathname);
+  const match = /^\/parties\/([^/]+)(?:\/(movies|plans|surprises)(?:\/([^/]+))?)?$/.exec(url.pathname);
   if (!match || !UUID.test(match[1])) throw new PartyError(404, "Ruta de party no disponible.");
   const [, partyId, collection, id] = match;
   if (!collection) return { kind: "snapshot", partyId, methods: ["GET"] };
+  if (collection === "surprises") {
+    if (id && id !== "reveal") throw new PartyError(404, "Ruta de party no disponible.");
+    return { kind: id ? "reveal" : "surprises", partyId, methods: ["POST"] };
+  }
   if (id) {
     if (collection === "movies") movieId(id);
     else uuid(id);
@@ -176,11 +189,16 @@ function snapshotStatements(db, partyId) {
     db.prepare(`SELECT p.id, p.movie_id, p.food_id, p.date, p.place, p.completed, p.created_by, a.name AS author_name
       FROM party_plans p JOIN party_members a ON a.party_id = p.party_id AND a.id = p.created_by
       WHERE p.party_id = ? ORDER BY p.rowid`).bind(partyId),
+    db.prepare("SELECT count(*) AS pending_count FROM party_surprises WHERE party_id = ? AND revealed_at IS NULL").bind(partyId),
+    db.prepare(`SELECT title, year, revealed_at FROM party_surprises WHERE rowid IN (
+      SELECT min(rowid) FROM party_surprises WHERE party_id = ? AND revealed_at IS NOT NULL
+      GROUP BY title_key, year
+    ) ORDER BY revealed_at DESC`).bind(partyId),
   ];
 }
 
 function snapshot(results) {
-  const [parties, members, movies, plans] = results.slice(-4).map((result) => result.results);
+  const [parties, members, movies, plans, pending, history] = results.slice(-6).map((result) => result.results);
   const party = parties[0];
   if (!party) throw new PartyError(404, "No se encontr\u00f3 la party.");
   return {
@@ -193,7 +211,65 @@ function snapshot(results) {
       id: plan.id, movieId: plan.movie_id, foodId: plan.food_id, date: plan.date, place: plan.place,
       completed: Boolean(plan.completed), createdBy: plan.created_by, createdByName: plan.author_name,
     })),
+    surprise: {
+      pendingCount: pending[0].pending_count,
+      history: history.map((entry) => ({
+        title: entry.title, year: entry.year, revealedAt: new Date(entry.revealed_at).toISOString(),
+      })),
+      nextRevealAt: history.length ? new Date(history[0].revealed_at + SURPRISE_INTERVAL_MS).toISOString() : null,
+    },
   };
+}
+
+async function mutateSurprise(request, db, route, member) {
+  const { partyId, kind } = route;
+  if (kind === "reveal" && member.role !== "host") {
+    throw new PartyError(403, "Solo el anfitrión puede revelar la sorpresa.");
+  }
+  const body = await readBody(request);
+  const statements = [];
+  if (kind === "surprises") {
+    const entry = validateSurprise(body);
+    // Looking up titles here would leak hidden queue membership through counts and capacity.
+    statements.push(db.prepare(`INSERT INTO party_surprises (party_id, id, title, title_key, year)
+      SELECT ?, ?, ?, ?, ? WHERE NOT EXISTS
+        (SELECT 1 FROM party_surprises WHERE party_id = ? AND id = ?)
+      ON CONFLICT (party_id, id) DO NOTHING`)
+      .bind(partyId, entry.id, entry.title, entry.titleKey, entry.year, partyId, entry.id));
+  } else {
+    if (Object.keys(body).length) invalid();
+    const now = Date.now();
+    // Retire late duplicates only at an eligible host reveal, never during submission or polling.
+    statements.push(db.prepare(`UPDATE party_surprises AS pending SET revealed_at = (
+        SELECT min(revealed.revealed_at) FROM party_surprises AS revealed
+        WHERE revealed.party_id = pending.party_id AND revealed.title_key = pending.title_key
+          AND revealed.year IS pending.year AND revealed.revealed_at IS NOT NULL
+      ) WHERE pending.party_id = ? AND pending.revealed_at IS NULL AND EXISTS (
+        SELECT 1 FROM party_surprises AS revealed
+        WHERE revealed.party_id = pending.party_id AND revealed.title_key = pending.title_key
+          AND revealed.year IS pending.year AND revealed.revealed_at IS NOT NULL
+      ) AND NOT EXISTS (
+        SELECT 1 FROM party_surprises WHERE party_id = ? AND revealed_at > ?
+      )`).bind(partyId, partyId, now - SURPRISE_INTERVAL_MS));
+    // Materialize one random distinct group so each updated duplicate uses the same draw.
+    statements.push(db.prepare(`WITH chosen AS MATERIALIZED (
+        SELECT title_key, year FROM party_surprises
+        WHERE party_id = ? AND revealed_at IS NULL AND NOT EXISTS (
+          SELECT 1 FROM party_surprises WHERE party_id = ? AND revealed_at > ?
+        )
+        GROUP BY title_key, year ORDER BY random() LIMIT 1
+      )
+      UPDATE party_surprises SET revealed_at = ?
+      WHERE party_id = ? AND revealed_at IS NULL AND EXISTS (
+        SELECT 1 FROM chosen WHERE chosen.title_key = party_surprises.title_key AND chosen.year IS party_surprises.year
+      )`).bind(partyId, partyId, now - SURPRISE_INTERVAL_MS, now, partyId));
+  }
+  const results = await db.batch([...statements, ...snapshotStatements(db, partyId)]);
+  const current = snapshot(results);
+  if (kind === "reveal" && !current.surprise.history.length) {
+    throw new PartyError(409, "Todavía no hay películas sorpresa para revelar.");
+  }
+  return json(current);
 }
 
 async function authenticate(request, db, partyId) {
@@ -305,6 +381,7 @@ function databaseError(error) {
     ["party_member_limit", "La party ya tiene el m\u00e1ximo de 50 participantes."],
     ["party_movie_limit", "La party ya tiene el m\u00e1ximo de 200 pel\u00edculas."],
     ["party_plan_limit", "La party ya tiene el m\u00e1ximo de 500 planes."],
+    ["party_surprise_limit", "La party ya tiene el máximo de 200 propuestas sorpresa."],
   ]) {
     if (message.includes(marker)) return new PartyError(409, description);
   }
@@ -344,6 +421,7 @@ export async function handlePartyRequest(request, env) {
     if (route.kind === "create" || route.kind === "join") return await createOrJoin(request, db, route);
     const member = await authenticate(request, db, route.partyId);
     if (route.kind === "snapshot") return json(snapshot(await db.batch(snapshotStatements(db, route.partyId))));
+    if (route.kind === "surprises" || route.kind === "reveal") return await mutateSurprise(request, db, route, member);
     return await mutate(request, db, route, member);
   } catch (error) {
     const known = error instanceof PartyError ? error : databaseError(error);

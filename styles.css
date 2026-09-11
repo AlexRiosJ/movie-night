@@ -156,6 +156,8 @@ body:has(#party-dialog[open]) { overflow: hidden; }
 .party-options[open] summary .icon { rotate: 180deg; }
 .party-options summary:not([hidden]) + .party-form { padding-top: 12px; }
 .party-form { display: grid; gap: 14px; }
+.party-surprises { display: grid; gap: 12px; padding-block: 16px; border-block: 1px solid var(--border); }
+.party-surprise-history { display: grid; gap: 8px; margin: 0; padding-left: 20px; }
 .party-modes { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; padding: 4px; border-radius: 10px; background: var(--page); border: 1px solid var(--border); }
 .party-modes button { min-height: 40px; padding: 8px 12px; border: 0; border-radius: 7px; background: transparent; color: var(--muted); font-size: 13px; font-weight: 600; }
 .party-modes button[aria-pressed="true"] { background: var(--surface); color: var(--accent); box-shadow: 0 1px 4px #23162914; }

@@ -7,10 +7,10 @@
     <meta name="description" content="Una peli, algo rico y un buen plan. Organiza tus movie nights y guarda tu colección, sin cuentas ni complicaciones." data-en-content="A movie, good food, and a great plan. Organize your movie nights and save your collection, without accounts or complications.">
     <title data-en="Movie Night — Your next great plan">Movie Night &mdash; Tu pr&oacute;ximo buen plan</title>
     <link rel="icon" href="./assets/favicon.svg" type="image/svg+xml">
-    <link rel="stylesheet" href="./styles.css?v=app-language-1">
+    <link rel="stylesheet" href="./styles.css?v=party-surprises-1">
     <script src="./config.js?v=parties-1" defer></script>
-    <script src="./i18n.js?v=app-language-1" defer></script>
-    <script src="./parties.js?v=app-language-1" defer></script>
+    <script src="./i18n.js?v=party-surprises-1" defer></script>
+    <script src="./parties.js?v=party-surprises-1" defer></script>
     <script src="./app.js?v=app-language-1" defer></script>
   </head>
   <body>
@@ -327,6 +327,22 @@
           <p id="party-members" class="helper"></p>
           <button id="party-refresh" class="button button-text" type="button" hidden>Actualizar ahora</button>
         </div>
+        <section id="party-surprises" class="party-surprises" aria-labelledby="party-surprises-title" hidden>
+          <h3 id="party-surprises-title" data-en="Surprise movie nights">Noches sorpresa</h3>
+          <p class="helper" data-en="Submit a movie here, not in the public collection. Pending titles stay hidden from everyone, including the host, and no author is saved.">Prop&oacute;n una pel&iacute;cula aqu&iacute;, no en la colecci&oacute;n p&uacute;blica. Los t&iacute;tulos pendientes se ocultan a todos, incluido el anfitri&oacute;n, y no se guarda el autor.</p>
+          <p id="party-surprise-count" class="helper" aria-live="polite"></p>
+          <form id="party-surprise-form" class="party-form">
+            <label for="party-surprise-title"><span data-en="Secret movie title">T&iacute;tulo de la pel&iacute;cula secreta</span><input id="party-surprise-title" type="text" maxlength="120" autocomplete="off" required></label>
+            <label for="party-surprise-year"><span data-en="Year (optional, to distinguish remakes)">A&ntilde;o (opcional, para distinguir versiones)</span><input id="party-surprise-year" type="number" min="1888" max="2200" step="1" autocomplete="off"></label>
+            <button id="party-surprise-submit" class="button button-secondary" type="submit" data-en="Submit anonymously">Enviar de forma an&oacute;nima</button>
+          </form>
+          <p id="party-surprise-status" class="helper" role="status" hidden></p>
+          <p class="helper" data-en="When you meet, the host reveals one random movie for everyone. The next draw unlocks 7 days later; nothing is revealed automatically. The same title and year will not repeat.">Al reunirse, el anfitri&oacute;n revela una pel&iacute;cula al azar para todos. El siguiente sorteo se habilita 7 d&iacute;as despu&eacute;s; no se revela nada autom&aacute;ticamente. El mismo t&iacute;tulo y a&ntilde;o no se repite.</p>
+          <button id="party-surprise-reveal" class="button button-primary" type="button" data-en="Reveal this meeting's movie">Revelar la pel&iacute;cula de esta reuni&oacute;n</button>
+          <p id="party-surprise-next" class="helper"></p>
+          <h4 data-en="Revealed movies">Pel&iacute;culas reveladas</h4>
+          <ul id="party-surprise-history" class="party-surprise-history" aria-live="polite"></ul>
+        </section>
         <p id="party-status" class="helper" role="status" aria-live="polite" hidden></p>
         <p id="party-storage-notice" class="notice" role="alert" hidden></p>
         <p id="party-setup-notice" class="helper" hidden><span data-en="Parties need a server connection. Configure the Worker URL in">Las parties necesitan una conexi&oacute;n al servidor. Configura la URL del Worker en</span> <code>config.js</code> <span data-en="following the README.">siguiendo el README.</span></p>
